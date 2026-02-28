@@ -1,0 +1,111 @@
+{
+  "$schema": "https://coordos.io/schemas/spu/v1",
+  "spu_ref": "v://zhongbei/spu/bridge/superstructure_drawing@v1",
+  "name": "上部结构施工图",
+  "version": "v1",
+  "domain": "bridge",
+  "stage": "施工图设计",
+  "kind": "DRAWING",
+  "status": "ACTIVE",
+  "spec_basis": ["JTG D60-2015", "JTG/T D65-06-2015"],
+
+  "product_unit": {
+    "deliverables": [
+      { "name":"桥跨总体布置图","format":["DWG","PDF"],"required":true,
+        "completeness_check":["跨径布置","梁底标高","支座中心线","横断面"] },
+      { "name":"主梁配筋图","format":["DWG","PDF"],"required":true,
+        "completeness_check":["预应力束布置","普通钢筋","腹板配筋","端部构造"] },
+      { "name":"横隔板详图","format":["DWG","PDF"],"required":true,
+        "completeness_check":["横隔板间距","配筋","与主梁连接"] },
+      { "name":"支座布置图","format":["DWG","PDF"],"required":true,
+        "completeness_check":["支座型号","支座垫石","锚栓布置"] },
+      { "name":"上部结构工程量表","format":["XLSX"],"required":true,
+        "completeness_check":["混凝土方量","预应力钢绞线","普通钢筋","支座数量"] }
+    ]
+  },
+
+  "parameter_unit": {
+    "input_parameters": {
+      "span_length":       { "label":"跨径","type":"float","unit":"m","range":[10,200],"spec_ref":"JTG_D60_2015:4.1" },
+      "beam_type":         { "label":"梁型","type":"enum","values":["PC_BOX","PC_T","PC_I","STEEL_BOX"],"default":"PC_BOX" },
+      "bridge_width":      { "label":"桥面宽度","type":"float","unit":"m","range":[6,50] },
+      "girder_height":     { "label":"梁高","type":"float","unit":"m","range":[0.5,8.0] },
+      "prestress_grade":   { "label":"预应力钢绞线级别","type":"enum","values":["1860","1960"],"default":"1860" },
+      "concrete_grade":    { "label":"混凝土等级","type":"enum","values":["C40","C45","C50","C55"],"default":"C50" },
+      "tendon_count":      { "label":"预应力束数量","type":"integer","range":[2,20] },
+      "tendon_spec":       { "label":"每束钢绞线数","type":"enum","values":[5,7,9,12,15,19],"default":12 }
+    },
+    "input_resource_refs": {
+      "pier_utxo":   { "label":"墩柱施工图UTXO","kind":"PIER_DRAWING_UTXO","required":true,
+        "fields_needed":["pier_top_elevation","bearing_centerline","pier_width"] },
+      "load_utxo":   { "label":"荷载计算书","kind":"LOAD_CALCULATION","required":true,
+        "fields_needed":["dead_load","live_load","wind_load","temperature_load"] },
+      "route_utxo":  { "label":"线路设计参数","kind":"ROUTE_DESIGN","required":true,
+        "fields_needed":["design_speed","horizontal_curve","vertical_grade","clearance"] }
+    }
+  },
+
+  "process_unit": {
+    "total_steps": 5,
+    "steps": [
+      { "seq":1,"name":"预应力体系设计","skill":"prestress_system_design",
+        "inputs":["load_utxo","route_utxo"],
+        "output_kind":"PRESTRESS_DESIGN_UTXO","auto_executable":true,"confidence_threshold":0.85,
+        "spec_ref":"JTG_D60_2015:6.3","note":"预应力体系是上部结构核心，AI辅助人工确认" },
+      { "seq":2,"name":"主梁截面设计","skill":"girder_section_design",
+        "inputs":["prestress_design_utxo","load_utxo"],
+        "output_kind":"GIRDER_SECTION_UTXO","auto_executable":true,"confidence_threshold":0.87 },
+      { "seq":3,"name":"普通钢筋配筋","skill":"girder_rebar_design",
+        "inputs":["girder_section_utxo","load_utxo"],
+        "output_kind":"GIRDER_REBAR_UTXO","auto_executable":true,"confidence_threshold":0.89 },
+      { "seq":4,"name":"施工图出图","skill":"superstructure_drawing_gen",
+        "inputs":["girder_section_utxo","girder_rebar_utxo","prestress_design_utxo","pier_utxo"],
+        "output_kind":"SUPERSTRUCTURE_DRAWING_UTXO","auto_executable":true,"confidence_threshold":0.95 },
+      { "seq":5,"name":"自检校验","skill":"spu_self_validate",
+        "inputs":["superstructure_drawing_utxo","prestress_design_utxo","girder_section_utxo"],
+        "output_kind":"SELF_CHECK_UTXO","auto_executable":true,"confidence_threshold":1.0 }
+    ]
+  },
+
+  "executor_requirement": {
+    "capability_level":"工程师及以上",
+    "min_experience_years":5,
+    "required_skills":["prestress_design","girder_design","bridge_structure"],
+    "qualification":"注册结构工程师（优先）",
+    "energy":{ "kind":"LABOR","base_days":15,"range_days":[10,30] },
+    "ai_executable":{
+      "full_auto_condition":"standard_span AND span_length <= 50 AND beam_type = PC_BOX",
+      "assisted_condition":"span_length > 50 OR non_standard_section",
+      "human_required_condition":"span_length > 100 OR special_structure OR STEEL_BOX"
+    }
+  },
+
+  "acceptance_spec": {
+    "parameter_checks": [
+      { "check":"girder_height >= span_length / 20","spec_ref":"JTG_D60_2015:4.3","blocking":true },
+      { "check":"prestress_effective_ratio >= 0.75","spec_ref":"JTG_D60_2015:6.3.2","blocking":true }
+    ],
+    "completeness_checks":["product_unit.deliverables ALL present"],
+    "evidence_required":[
+      { "kind":"PRESTRESS_DESIGN_UTXO","description":"预应力体系设计","blocking":true },
+      { "kind":"GIRDER_SECTION_UTXO","description":"主梁截面计算","blocking":true },
+      { "kind":"SELF_CHECK_UTXO","description":"自检记录","blocking":true }
+    ]
+  },
+
+  "utxo_state_machine": {
+    "states":["DRAFT","REVIEWED","APPROVED","SEALED","DELIVERABLE"],
+    "transitions":[
+      { "from":"DRAFT","to":"REVIEWED","condition":"evidence_required ALL present","auto":true },
+      { "from":"REVIEWED","to":"APPROVED","condition":"parameter_checks ALL pass","auto":true },
+      { "from":"APPROVED","to":"SEALED","condition":"ProjectNode.status = DELIVERED","auto":false },
+      { "from":"SEALED","to":"DELIVERABLE","condition":"RULE-002 pass","auto":true }
+    ]
+  },
+
+  "upstream_spu_refs":["v://zhongbei/spu/bridge/pier_rebar_drawing@v1"],
+  "downstream_spu_refs":[
+    "v://zhongbei/spu/bridge/prestress_record@v1",
+    "v://zhongbei/spu/bridge/review_certificate@v1"
+  ]
+}

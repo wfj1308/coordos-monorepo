@@ -1,0 +1,767 @@
+openapi: 3.0.3
+info:
+  title: CoordOS Design Institute API
+  version: 0.2.0
+  description: |
+    OpenAPI baseline for `services/design-institute`.
+    This spec is intentionally "implementation-first":
+    - Path list is aligned to the current HTTP router.
+    - Request/response schemas keep a permissive envelope where field sets are still evolving.
+    - It is safe for client SDK generation and contract testing at endpoint level.
+servers:
+  - url: http://localhost:8090
+    description: Local development
+tags:
+  - name: Health
+  - name: Project
+  - name: Contract
+  - name: Gathering
+  - name: Settlement
+  - name: Invoice
+  - name: CostTicket
+  - name: Payment
+  - name: Company
+  - name: Employee
+  - name: Achievement
+  - name: Approval
+  - name: Report
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Service health check
+      operationId: designHealth
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  # -------------------------- Project --------------------------
+  /api/v1/projects:
+    post:
+      tags: [Project]
+      summary: Create root project node
+      operationId: createRootProject
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GenericObject"
+      responses:
+        "201":
+          $ref: "#/components/responses/GenericSuccess"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+    get:
+      tags: [Project]
+      summary: List project nodes
+      operationId: listProjects
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+        - name: status
+          in: query
+          schema: {type: string}
+      responses:
+        "200":
+          $ref: "#/components/responses/GenericSuccess"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/projects/children:
+    post:
+      tags: [Project]
+      summary: Create child project node
+      operationId: createChildProject
+      parameters:
+        - name: parent_ref
+          in: query
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GenericObject"}
+      responses:
+        "201": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/projects/get:
+    get:
+      tags: [Project]
+      summary: Get project by ref
+      operationId: getProject
+      parameters:
+        - name: ref
+          in: query
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/projects/status:
+    put:
+      tags: [Project]
+      summary: Transition project status
+      operationId: transitionProjectStatus
+      parameters:
+        - name: ref
+          in: query
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  # -------------------------- Contract --------------------------
+  /api/v1/contracts:
+    post:
+      tags: [Contract]
+      summary: Create contract
+      operationId: createContract
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GenericObject"}
+      responses:
+        "201": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+    get:
+      tags: [Contract]
+      summary: List contracts
+      operationId: listContracts
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+        - name: keyword
+          in: query
+          schema: {type: string}
+        - name: company_id
+          in: query
+          schema: {type: integer}
+        - name: employee_id
+          in: query
+          schema: {type: integer}
+        - name: parent_id
+          in: query
+          schema: {type: integer}
+        - name: state
+          in: query
+          schema: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/contracts/{id}:
+    get:
+      tags: [Contract]
+      summary: Get contract by ID
+      operationId: getContract
+      parameters:
+        - $ref: "#/components/parameters/PathID"
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/contracts/{id}/approve:
+    put:
+      tags: [Contract]
+      summary: Approve contract
+      operationId: approveContract
+      parameters:
+        - $ref: "#/components/parameters/PathID"
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/contracts/{id}/void:
+    put:
+      tags: [Contract]
+      summary: Void contract
+      operationId: voidContract
+      parameters:
+        - $ref: "#/components/parameters/PathID"
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/contracts/{id}/finance-summary:
+    get:
+      tags: [Contract]
+      summary: Get finance summary for contract
+      operationId: contractFinanceSummary
+      parameters:
+        - $ref: "#/components/parameters/PathID"
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  # -------------------------- Gathering --------------------------
+  /api/v1/gatherings:
+    post:
+      tags: [Gathering]
+      summary: Create gathering
+      operationId: createGathering
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GenericObject"}
+      responses:
+        "201": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+    get:
+      tags: [Gathering]
+      summary: List gatherings
+      operationId: listGatherings
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/gatherings/{id}:
+    get:
+      tags: [Gathering]
+      summary: Get gathering by ID
+      operationId: getGathering
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/gatherings/{id}/approve:
+    put:
+      tags: [Gathering]
+      summary: Approve gathering
+      operationId: approveGathering
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  # -------------------------- Settlement --------------------------
+  /api/v1/settlements:
+    post:
+      tags: [Settlement]
+      summary: Create settlement
+      operationId: createSettlement
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GenericObject"}
+      responses:
+        "201": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+    get:
+      tags: [Settlement]
+      summary: List settlements
+      operationId: listSettlements
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/settlements/{id}:
+    get:
+      tags: [Settlement]
+      summary: Get settlement by ID
+      operationId: getSettlement
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/settlements/{id}/submit:
+    put:
+      tags: [Settlement]
+      summary: Submit settlement
+      operationId: submitSettlement
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/settlements/{id}/approve:
+    put:
+      tags: [Settlement]
+      summary: Approve settlement
+      operationId: approveSettlement
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/settlements/{id}/pay:
+    put:
+      tags: [Settlement]
+      summary: Mark settlement as paid
+      operationId: paySettlement
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  # -------------------------- Invoice --------------------------
+  /api/v1/invoices:
+    post:
+      tags: [Invoice]
+      summary: Create invoice
+      operationId: createInvoice
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GenericObject"}
+      responses:
+        "201": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+    get:
+      tags: [Invoice]
+      summary: List invoices
+      operationId: listInvoices
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/invoices/{id}:
+    get:
+      tags: [Invoice]
+      summary: Get invoice by ID
+      operationId: getInvoice
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/invoices/{id}/submit:
+    put:
+      tags: [Invoice]
+      summary: Submit invoice
+      operationId: submitInvoice
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/invoices/{id}/approve:
+    put:
+      tags: [Invoice]
+      summary: Approve invoice
+      operationId: approveInvoice
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/invoices/{id}/issue:
+    put:
+      tags: [Invoice]
+      summary: Issue invoice
+      operationId: issueInvoice
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/invoices/{id}/scrap:
+    put:
+      tags: [Invoice]
+      summary: Scrap invoice
+      operationId: scrapInvoice
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  # -------------------------- CostTicket --------------------------
+  /api/v1/costtickets:
+    post:
+      tags: [CostTicket]
+      summary: Create cost ticket
+      operationId: createCostTicket
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GenericObject"}
+      responses:
+        "201": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+    get:
+      tags: [CostTicket]
+      summary: List cost tickets
+      operationId: listCostTickets
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/costtickets/{id}:
+    get:
+      tags: [CostTicket]
+      summary: Get cost ticket by ID
+      operationId: getCostTicket
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/costtickets/{id}/pay:
+    put:
+      tags: [CostTicket]
+      summary: Mark cost ticket as paid
+      operationId: payCostTicket
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  # -------------------------- Payment --------------------------
+  /api/v1/payments:
+    post:
+      tags: [Payment]
+      summary: Create payment request
+      operationId: createPayment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GenericObject"}
+      responses:
+        "201": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/payments/{id}:
+    get:
+      tags: [Payment]
+      summary: Get payment by ID
+      operationId: getPayment
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/payments/{id}/approve:
+    put:
+      tags: [Payment]
+      summary: Approve payment
+      operationId: approvePayment
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/payments/{id}/pay:
+    put:
+      tags: [Payment]
+      summary: Mark payment as paid
+      operationId: payPayment
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  # -------------------------- Company --------------------------
+  /api/v1/companies:
+    get:
+      tags: [Company]
+      summary: List companies
+      operationId: listCompanies
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/companies/{id}:
+    get:
+      tags: [Company]
+      summary: Get company by ID
+      operationId: getCompany
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/companies/{id}/branches:
+    get:
+      tags: [Company]
+      summary: List company branches
+      operationId: listCompanyBranches
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/companies/{id}/bind-executor:
+    put:
+      tags: [Company]
+      summary: Bind executor to company
+      operationId: bindCompanyExecutor
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GenericObject"}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  # -------------------------- Employee --------------------------
+  /api/v1/employees:
+    post:
+      tags: [Employee]
+      summary: Create employee
+      operationId: createEmployee
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GenericObject"}
+      responses:
+        "201": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+    get:
+      tags: [Employee]
+      summary: List employees
+      operationId: listEmployees
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/employees/{id}:
+    get:
+      tags: [Employee]
+      summary: Get employee by ID
+      operationId: getEmployee
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/employees/{id}/resign:
+    put:
+      tags: [Employee]
+      summary: Mark employee resigned
+      operationId: resignEmployee
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  # -------------------------- Achievement --------------------------
+  /api/v1/achievements:
+    get:
+      tags: [Achievement]
+      summary: List achievements
+      operationId: listAchievements
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/achievements/{id}:
+    get:
+      tags: [Achievement]
+      summary: Get achievement by ID
+      operationId: getAchievement
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  # -------------------------- Approval --------------------------
+  /api/v1/approvals:
+    post:
+      tags: [Approval]
+      summary: Submit approval flow
+      operationId: submitApproval
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GenericObject"}
+      responses:
+        "201": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/approvals/act:
+    post:
+      tags: [Approval]
+      summary: Act on approval task
+      operationId: actApproval
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GenericObject"}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/approvals/{id}:
+    get:
+      tags: [Approval]
+      summary: Get approval by ID
+      operationId: getApproval
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/approvals/{id}/detail:
+    get:
+      tags: [Approval]
+      summary: Get approval detail by ID
+      operationId: getApprovalDetail
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/approvals/pending:
+    get:
+      tags: [Approval]
+      summary: List pending approvals
+      operationId: listPendingApprovals
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/approvals/biz:
+    get:
+      tags: [Approval]
+      summary: Get approvals by business key
+      operationId: getApprovalsByBiz
+      parameters:
+        - name: biz_type
+          in: query
+          required: true
+          schema: {type: string}
+        - name: biz_id
+          in: query
+          required: true
+          schema: {type: integer}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  # -------------------------- Report --------------------------
+  /api/v1/reports/overview:
+    get:
+      tags: [Report]
+      summary: Get overview report
+      operationId: reportOverview
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/reports/company:
+    get:
+      tags: [Report]
+      summary: Get company report
+      operationId: reportCompany
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/reports/contracts/{id}:
+    get:
+      tags: [Report]
+      summary: Get contract analysis report
+      operationId: reportContract
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/reports/gathering-progress:
+    get:
+      tags: [Report]
+      summary: Get monthly gathering progress report
+      operationId: reportGatheringProgress
+      parameters:
+        - name: year
+          in: query
+          required: true
+          schema: {type: integer}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/reports/employees:
+    get:
+      tags: [Report]
+      summary: Get employee performance report
+      operationId: reportEmployees
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+components:
+  parameters:
+    PathID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        default: 20
+    Offset:
+      name: offset
+      in: query
+      schema:
+        type: integer
+        default: 0
+    From:
+      name: from
+      in: query
+      schema:
+        type: string
+        format: date-time
+    To:
+      name: to
+      in: query
+      schema:
+        type: string
+        format: date-time
+  schemas:
+    GenericObject:
+      type: object
+      additionalProperties: true
+      description: Implementation-first object envelope.
+    HealthResponse:
+      type: object
+      properties:
+        status: {type: string, example: ok}
+        service: {type: string, example: design-institute}
+        timestamp: {type: string, format: date-time}
+      required: [status, service, timestamp]
+    ErrorResponse:
+      type: object
+      properties:
+        error: {type: string}
+      required: [error]
+  responses:
+    GenericSuccess:
+      description: Success response
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/GenericObject"
+    ErrorResponse:
+      description: Error response
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"

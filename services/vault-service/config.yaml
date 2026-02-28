@@ -1,0 +1,16 @@
+server:
+  addr: ":8080"
+  jwt_secret: "CHANGE_ME"
+
+tenant:
+  id: "10000"
+
+postgres:
+  dsn: "postgres://coordos:YOUR_PG_PASSWORD@localhost:5432/coordos?sslmode=disable"
+
+mysql:
+  dsn: "root:YOUR_MYSQL_PASSWORD@tcp(localhost:3306)/icrm?charset=utf8mb4&parseTime=true&loc=Local"
+
+storage:
+  backend: "sqlite"
+  sqlite_path: "./coordos.db"

@@ -1,0 +1,8 @@
+server:
+  addr: ":8090"
+
+tenant:
+  id: 10000
+
+postgres:
+  dsn: "postgres://coordos:coordos@localhost:5432/coordos?sslmode=disable"

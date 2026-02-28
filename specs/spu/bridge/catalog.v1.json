@@ -1,0 +1,200 @@
+{
+  "$schema": "https://coordos.io/schemas/spu-catalog/v1",
+  "catalog_ref": "v://zhongbei/spu/bridge/catalog@v1",
+  "name": "桥梁工程SPU目录",
+  "domain": "bridge",
+  "version": "v1",
+  "description": "桥梁桥墩完整闭合链：从设计出图到结算凭证，10个SPU覆盖全生命周期",
+
+  "___CHAIN___": "桥墩完整闭合链（顺序不可颠倒）",
+
+  "closure_chain": [
+    {
+      "seq": 1,
+      "spu_ref": "v://zhongbei/spu/bridge/pile_foundation_drawing@v1",
+      "name": "桩基施工图",
+      "kind": "DRAWING",
+      "stage": "设计",
+      "auto_executable": "条件性（标准地质>90%置信度）",
+      "blocking_for_next": true,
+      "note": "链路起点，所有后续SPU的基础"
+    },
+    {
+      "seq": 2,
+      "spu_ref": "v://zhongbei/spu/bridge/pile_cap_drawing@v1",
+      "name": "承台施工图",
+      "kind": "DRAWING",
+      "stage": "设计",
+      "auto_executable": "条件性（标准桩型>88%置信度）",
+      "blocking_for_next": true
+    },
+    {
+      "seq": 3,
+      "spu_ref": "v://zhongbei/spu/bridge/pier_rebar_drawing@v1",
+      "name": "墩柱配筋图",
+      "kind": "DRAWING",
+      "stage": "设计",
+      "auto_executable": "条件性（标准墩型、7度以下抗震）",
+      "blocking_for_next": true
+    },
+    {
+      "seq": 4,
+      "spu_ref": "v://zhongbei/spu/bridge/superstructure_drawing@v1",
+      "name": "上部结构施工图",
+      "kind": "DRAWING",
+      "stage": "设计",
+      "auto_executable": "条件性（跨径≤50m的箱梁）",
+      "blocking_for_next": true,
+      "note": "设计阶段终点，进入施工阶段"
+    },
+    {
+      "seq": 5,
+      "spu_ref": "v://zhongbei/spu/bridge/concealed_acceptance@v1",
+      "name": "隐蔽工程验收记录",
+      "kind": "RECORD",
+      "stage": "施工",
+      "auto_executable": "否（三方现场签字）",
+      "blocking_for_next": true,
+      "note": "施工过程最关键节点：封闭前唯一检查机会"
+    },
+    {
+      "seq": 6,
+      "spu_ref": "v://zhongbei/spu/bridge/prestress_record@v1",
+      "name": "预应力张拉记录",
+      "kind": "RECORD",
+      "stage": "施工",
+      "auto_executable": "IoT传感器接入后可自动采集",
+      "blocking_for_next": true,
+      "parallel_with": [5],
+      "note": "可与隐蔽验收并行，但必须在结构成型前完成"
+    },
+    {
+      "seq": 7,
+      "spu_ref": "v://zhongbei/spu/bridge/concrete_strength_report@v1",
+      "name": "混凝土强度检测报告",
+      "kind": "REPORT",
+      "stage": "施工",
+      "auto_executable": "检测机构API接入后可自动导入",
+      "blocking_for_next": true,
+      "note": "28天强度结果出来后自动更新UTXO状态"
+    },
+    {
+      "seq": 8,
+      "spu_ref": "v://zhongbei/spu/bridge/coordinate_proof@v1",
+      "name": "实测坐标证明",
+      "kind": "PROVE",
+      "stage": "竣工",
+      "auto_executable": "全站仪直连后可半自动",
+      "blocking_for_next": true,
+      "note": "竣工测量，证明构件位置符合设计"
+    },
+    {
+      "seq": 9,
+      "spu_ref": "v://zhongbei/spu/bridge/review_certificate@v1",
+      "name": "审图合格证",
+      "kind": "CERT",
+      "stage": "竣工",
+      "auto_executable": "否（审图机构出具）",
+      "blocking_for_next": true,
+      "note": "RULE-002触发点：总院实质参与的核心证明"
+    },
+    {
+      "seq": 10,
+      "spu_ref": "v://zhongbei/spu/bridge/settlement_cert@v1",
+      "name": "结算凭证",
+      "kind": "CERT",
+      "stage": "结算",
+      "auto_executable": "前序SPU全部APPROVED后自动生成",
+      "blocking_for_next": false,
+      "note": "链路终点，触发钱包分账"
+    }
+  ],
+
+  "___DISPUTE_PRC___": "DisputePRC 举证地图",
+
+  "dispute_scenarios": [
+    {
+      "scenario": "桩基质量纠纷",
+      "trigger": "出现不均匀沉降或裂缝",
+      "evidence_chain": [
+        "pile_foundation_drawing@v1  → 设计参数有无问题",
+        "concealed_acceptance@v1     → 施工时钢筋是否合格",
+        "concrete_strength_report@v1 → 混凝土强度是否达标",
+        "coordinate_proof@v1         → 桩位是否偏差过大"
+      ],
+      "auto_generate": true,
+      "note": "四个UTXO构成完整举证链，自动生成举证报告"
+    },
+    {
+      "scenario": "预应力质量纠纷",
+      "trigger": "主梁开裂或挠度超限",
+      "evidence_chain": [
+        "superstructure_drawing@v1   → 设计张拉力是否合理",
+        "prestress_record@v1         → 每束张拉数据是否合规",
+        "concrete_strength_report@v1 → 混凝土强度是否满足张拉条件"
+      ],
+      "auto_generate": true
+    },
+    {
+      "scenario": "竣工验收纠纷",
+      "trigger": "业主拒绝验收",
+      "evidence_chain": [
+        "coordinate_proof@v1         → 位置偏差在规范内",
+        "concrete_strength_report@v1 → 强度合格",
+        "review_certificate@v1       → 审图机构认可",
+        "settlement_cert@v1          → 结算条件已满足"
+      ],
+      "auto_generate": true
+    },
+    {
+      "scenario": "分包责任纠纷",
+      "trigger": "总院与分院互相推责",
+      "evidence_chain": [
+        "review_certificate@v1       → 总院审图记录（RULE-002）",
+        "concealed_acceptance@v1     → 三方签字记录",
+        "settlement_cert@v1          → GenesisUTXO委托链"
+      ],
+      "auto_generate": true,
+      "note": "委托链存证自动澄清责任边界"
+    }
+  ],
+
+  "___STATS___": "SPU库统计",
+
+  "statistics": {
+    "total_spu_count": 10,
+    "by_kind": {
+      "DRAWING": 4,
+      "RECORD":  2,
+      "REPORT":  1,
+      "PROVE":   1,
+      "CERT":    2
+    },
+    "by_stage": {
+      "设计": 4,
+      "施工": 3,
+      "竣工": 2,
+      "结算": 1
+    },
+    "auto_executable_count": 6,
+    "human_required_count": 4,
+    "estimated_design_auto_ratio": "设计阶段标准情况下70%可全自动",
+    "estimated_total_cycle_days": {
+      "traditional": "180-360天",
+      "with_coordos": "90-150天",
+      "speedup": "2x"
+    }
+  },
+
+  "___EXTENSION___": "下一批待开发SPU",
+
+  "next_batch": [
+    "abutment_drawing@v1           桥台施工图",
+    "bearing_installation@v1       支座安装记录",
+    "expansion_joint_record@v1     伸缩缝安装记录",
+    "deck_pavement_record@v1       桥面铺装记录",
+    "load_test_report@v1           荷载试验报告",
+    "completion_acceptance@v1      竣工验收证书",
+    "maintenance_manual@v1         养护手册"
+  ]
+}

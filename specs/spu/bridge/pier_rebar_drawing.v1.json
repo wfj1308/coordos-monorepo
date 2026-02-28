@@ -1,0 +1,100 @@
+{
+  "$schema": "https://coordos.io/schemas/spu/v1",
+  "spu_ref": "v://zhongbei/spu/bridge/pier_rebar_drawing@v1",
+  "name": "墩柱配筋图",
+  "version": "v1",
+  "domain": "bridge",
+  "stage": "施工图设计",
+  "kind": "DRAWING",
+  "status": "ACTIVE",
+  "spec_basis": ["JTG D60-2015", "JTG D63-2007"],
+
+  "product_unit": {
+    "deliverables": [
+      { "name":"墩柱立面配筋图","format":["DWG","PDF"],"required":true,
+        "completeness_check":["墩高标注","主筋规格","箍筋规格","加密区范围","截面变化"] },
+      { "name":"墩柱截面图","format":["DWG","PDF"],"required":true,
+        "completeness_check":["截面尺寸","主筋布置","箍筋形式","保护层"] },
+      { "name":"墩柱工程量表","format":["XLSX"],"required":true,
+        "completeness_check":["混凝土方量","钢筋重量"] }
+    ]
+  },
+
+  "parameter_unit": {
+    "input_parameters": {
+      "pier_height":        { "label":"墩高","type":"float","unit":"m","range":[3,50],"spec_ref":"JTG_D60_2015:7.2" },
+      "pier_diameter":      { "label":"墩柱直径（圆墩）","type":"float","unit":"m","range":[0.8,3.0] },
+      "pier_section_width": { "label":"墩柱宽度（矩形墩）","type":"float","unit":"m","range":[0.8,4.0] },
+      "pier_section_depth": { "label":"墩柱厚度（矩形墩）","type":"float","unit":"m","range":[0.8,4.0] },
+      "pier_type":          { "label":"墩型","type":"enum","values":["CIRCULAR","RECTANGULAR","HOLLOW"],"default":"CIRCULAR" },
+      "concrete_grade":     { "label":"混凝土等级","type":"enum","values":["C30","C35","C40","C45"],"default":"C35" },
+      "main_rebar_ratio":   { "label":"主筋配筋率","type":"float","unit":"%","range":[0.5,3.0],"spec_ref":"JTG_D60_2015:7.3.3" },
+      "stirrup_spacing":    { "label":"箍筋间距","type":"integer","unit":"mm","range":[80,250],"default":150 }
+    },
+    "input_resource_refs": {
+      "pile_cap_utxo":   { "label":"承台施工图UTXO","kind":"CAP_DRAWING_UTXO","required":true,
+        "fields_needed":["cap_top_elevation","cap_dimension"] },
+      "load_utxo":       { "label":"荷载计算书","kind":"LOAD_CALCULATION","required":true,
+        "fields_needed":["vertical_load_max","horizontal_load","moment_load","seismic_grade"] },
+      "seismic_utxo":    { "label":"抗震参数","kind":"SEISMIC_PARAMS","required":false,
+        "condition":"seismic_grade >= 7" }
+    }
+  },
+
+  "process_unit": {
+    "total_steps": 4,
+    "steps": [
+      { "seq":1,"name":"墩柱截面设计","skill":"pier_section_design",
+        "inputs":["pile_cap_utxo","load_utxo"],
+        "output_kind":"PIER_SECTION_UTXO","auto_executable":true,"confidence_threshold":0.88,
+        "spec_ref":"JTG_D60_2015:7.2" },
+      { "seq":2,"name":"墩柱配筋计算","skill":"pier_rebar_calc",
+        "inputs":["pier_section_utxo","load_utxo","seismic_utxo"],
+        "output_kind":"PIER_REBAR_UTXO","auto_executable":true,"confidence_threshold":0.87,
+        "spec_ref":"JTG_D60_2015:7.3" },
+      { "seq":3,"name":"配筋图出图","skill":"pier_drawing_gen",
+        "inputs":["pier_section_utxo","pier_rebar_utxo"],
+        "output_kind":"PIER_DRAWING_UTXO","auto_executable":true,"confidence_threshold":0.96 },
+      { "seq":4,"name":"自检校验","skill":"spu_self_validate",
+        "inputs":["pier_drawing_utxo","pier_section_utxo","pier_rebar_utxo"],
+        "output_kind":"SELF_CHECK_UTXO","auto_executable":true,"confidence_threshold":1.0 }
+    ]
+  },
+
+  "executor_requirement": {
+    "capability_level":"助理工程师及以上",
+    "required_skills":["pier_design","bridge_structure","seismic_design"],
+    "energy":{ "kind":"LABOR","base_days":4,"range_days":[3,10] },
+    "ai_executable":{
+      "full_auto_condition":"standard_pier AND seismic_grade < 7 AND pier_height <= 20",
+      "assisted_condition":"pier_height > 20 OR seismic_grade >= 7",
+      "human_required_condition":"irregular_pier OR seismic_grade >= 8"
+    }
+  },
+
+  "acceptance_spec": {
+    "parameter_checks": [
+      { "check":"main_rebar_ratio >= 0.5 AND main_rebar_ratio <= 3.0","spec_ref":"JTG_D60_2015:7.3.3","blocking":true },
+      { "check":"stirrup_spacing <= 200 OR (seismic_grade >= 7 AND stirrup_spacing <= 100)","spec_ref":"JTG_D60_2015:7.3.4","blocking":true }
+    ],
+    "completeness_checks":["product_unit.deliverables ALL present"],
+    "evidence_required":[
+      { "kind":"PIER_SECTION_UTXO","description":"截面设计计算书","blocking":true },
+      { "kind":"PIER_REBAR_UTXO","description":"配筋计算书","blocking":true },
+      { "kind":"SELF_CHECK_UTXO","description":"自检记录","blocking":true }
+    ]
+  },
+
+  "utxo_state_machine": {
+    "states":["DRAFT","REVIEWED","APPROVED","SEALED","DELIVERABLE"],
+    "transitions":[
+      { "from":"DRAFT","to":"REVIEWED","condition":"evidence_required ALL present","auto":true },
+      { "from":"REVIEWED","to":"APPROVED","condition":"parameter_checks ALL pass","auto":true },
+      { "from":"APPROVED","to":"SEALED","condition":"ProjectNode.status = DELIVERED","auto":false },
+      { "from":"SEALED","to":"DELIVERABLE","condition":"RULE-002 pass","auto":true }
+    ]
+  },
+
+  "upstream_spu_refs":["v://zhongbei/spu/bridge/pile_cap_drawing@v1"],
+  "downstream_spu_refs":["v://zhongbei/spu/bridge/superstructure_drawing@v1"]
+}

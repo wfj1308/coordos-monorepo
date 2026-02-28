@@ -1,0 +1,99 @@
+{
+  "$schema": "https://coordos.io/schemas/spu/v1",
+  "spu_ref": "v://zhongbei/spu/bridge/concealed_acceptance@v1",
+  "name": "隐蔽工程验收记录",
+  "version": "v1",
+  "domain": "bridge",
+  "stage": "施工过程",
+  "kind": "RECORD",
+  "status": "ACTIVE",
+  "spec_basis": ["JTG F80/1-2017", "JTG/T F50-2011"],
+
+  "description": "证据型SPU：隐蔽工程封闭前的强制验收存证。封闭后无法复查，此UTXO是唯一证据。",
+
+  "product_unit": {
+    "deliverables": [
+      { "name":"隐蔽工程验收记录表","format":["JSON","PDF"],"required":true,
+        "completeness_check":["工程部位","验收日期","验收项目清单","实测值","设计值","偏差","结论","各方签字"] },
+      { "name":"隐蔽前照片","format":["JPEG"],"required":true,
+        "completeness_check":["钢筋绑扎全景","钢筋间距","保护层垫块","预埋件位置"] },
+      { "name":"实测数据记录","format":["JSON"],"required":true,
+        "completeness_check":["钢筋间距实测","保护层厚度实测","预埋件坐标实测"] }
+    ]
+  },
+
+  "parameter_unit": {
+    "input_parameters": {
+      "structure_part":      { "label":"工程部位","type":"string","required":true,
+        "examples":["桩基","承台","墩柱","主梁"] },
+      "acceptance_date":     { "label":"验收日期","type":"string","required":true },
+      "rebar_spacing_actual":{ "label":"钢筋间距实测值","type":"float","unit":"mm" },
+      "cover_actual":        { "label":"保护层厚度实测值","type":"float","unit":"mm" },
+      "acceptance_conclusion":{ "label":"验收结论","type":"enum","values":["PASS","FAIL","CONDITIONAL_PASS"] }
+    },
+    "input_resource_refs": {
+      "design_drawing_utxo": { "label":"对应设计图纸UTXO","kind":"DRAWING_UTXO","required":true,
+        "fields_needed":["rebar_spacing_design","cover_design","tolerance"] },
+      "material_test_utxo":  { "label":"材料检测报告UTXO","kind":"MATERIAL_TEST_REPORT","required":true,
+        "fields_needed":["rebar_tensile_strength","rebar_yield_strength","cert_no"] }
+    }
+  },
+
+  "process_unit": {
+    "total_steps": 3,
+    "steps": [
+      { "seq":1,"name":"现场实测","skill":"field_measurement",
+        "inputs":["design_drawing_utxo"],
+        "output_kind":"FIELD_MEASUREMENT_UTXO","auto_executable":false,
+        "note":"必须现场人工实测，照片存证，不可补录" },
+      { "seq":2,"name":"偏差计算与判定","skill":"tolerance_check",
+        "inputs":["field_measurement_utxo","design_drawing_utxo"],
+        "output_kind":"TOLERANCE_CHECK_UTXO","auto_executable":true,"confidence_threshold":1.0,
+        "spec_ref":"JTG_F80/1_2017:附录A" },
+      { "seq":3,"name":"各方签字确认","skill":"multi_party_sign",
+        "inputs":["tolerance_check_utxo","material_test_utxo"],
+        "output_kind":"CONCEALED_ACCEPTANCE_UTXO","auto_executable":false,
+        "note":"施工方+监理方+设计方三方签字，缺一不可" }
+    ]
+  },
+
+  "executor_requirement": {
+    "capability_level":"施工技术员及以上",
+    "required_skills":["site_inspection","quality_control"],
+    "energy":{ "kind":"LABOR","base_days":0.5,"range_days":[0.25,1] },
+    "multi_party_required": {
+      "parties":["CONTRACTOR","SUPERVISOR","DESIGNER"],
+      "note":"三方必须同时在场，签字时间戳记录"
+    }
+  },
+
+  "acceptance_spec": {
+    "parameter_checks": [
+      { "check":"rebar_spacing_deviation <= 10mm","spec_ref":"JTG_F80/1_2017:A.2","blocking":true },
+      { "check":"cover_actual >= cover_design - 5","spec_ref":"JTG_F80/1_2017:A.3","blocking":true },
+      { "check":"acceptance_conclusion != FAIL","spec_ref":"JTG_F80/1_2017:3.1","blocking":true }
+    ],
+    "completeness_checks":["photos count >= 4","all parties signed"],
+    "evidence_required":[
+      { "kind":"FIELD_MEASUREMENT_UTXO","description":"现场实测记录","blocking":true },
+      { "kind":"PHOTO_UTXO","description":"隐蔽前照片（带时间戳）","blocking":true },
+      { "kind":"MULTI_PARTY_SIGNATURE","description":"三方签字","blocking":true }
+    ]
+  },
+
+  "utxo_state_machine": {
+    "states":["DRAFT","REVIEWED","APPROVED","SEALED","DELIVERABLE"],
+    "transitions":[
+      { "from":"DRAFT","to":"REVIEWED","condition":"field_measurement done AND photos uploaded","auto":true },
+      { "from":"REVIEWED","to":"APPROVED","condition":"three parties signed AND tolerance_check pass","auto":false,
+        "note":"必须人工三方签字后系统自动检查" },
+      { "from":"APPROVED","to":"SEALED","condition":"concealment_completed","auto":false },
+      { "from":"SEALED","to":"DELIVERABLE","condition":"RULE-002 pass","auto":true }
+    ]
+  },
+
+  "dispute_prc_value": "隐蔽工程一旦封闭无法复查。此UTXO是钢筋保护层不足、间距偏差等质量纠纷的核心证据。三方签字+时间戳+照片，任何一方事后不得抵赖。",
+
+  "upstream_spu_refs":["v://zhongbei/spu/bridge/prestress_record@v1"],
+  "downstream_spu_refs":["v://zhongbei/spu/bridge/concrete_strength_report@v1"]
+}

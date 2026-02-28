@@ -1,0 +1,161 @@
+{
+  "$schema": "https://coordos.io/schemas/spu/v1",
+  "spu_ref": "v://zhongbei/spu/bridge/settlement_cert@v1",
+  "name": "结算凭证",
+  "version": "v1",
+  "domain": "bridge",
+  "stage": "项目结算",
+  "kind": "CERT",
+  "status": "ACTIVE",
+  "spec_basis": ["CoordOS RULE-002", "CoordOS RULE-003", "CoordOS RULE-005"],
+
+  "description": "终态SPU：项目结算凭证。这是整条UTXO链的终点，触发钱包到账。必须在所有上游SPU全部SEALED后才能产出。",
+
+  "product_unit": {
+    "deliverables": [
+      { "name":"结算确认书","format":["PDF","JSON"],"required":true,
+        "completeness_check":["项目名称","合同金额","实际完成量","结算金额","质保金金额","各方签字","结算日期"] },
+      { "name":"UTXO完整性证明","format":["JSON"],"required":true,
+        "completeness_check":["所有必要UTXO的ref列表","每个UTXO的状态","完整性校验哈希"] },
+      { "name":"分账明细","format":["JSON"],"required":true,
+        "completeness_check":["平台服务费","总院管理费","质保金","执行体到账金额","各钱包地址"] }
+    ]
+  },
+
+  "parameter_unit": {
+    "input_parameters": {
+      "contract_amount":     { "label":"合同金额","type":"integer","unit":"分（人民币）","required":true },
+      "completed_amount":    { "label":"实际完成金额","type":"integer","unit":"分" },
+      "quality_escrow":      { "label":"质保金","type":"integer","unit":"分","note":"通常为合同金额5%" },
+      "settlement_amount":   { "label":"本次结算金额","type":"integer","unit":"分",
+        "formula":"completed_amount - quality_escrow - already_paid" },
+      "settlement_date":     { "label":"结算日期","type":"string","required":true },
+      "quality_defect_period":{ "label":"质保期","type":"integer","unit":"月","default":24 }
+    },
+    "derived_parameters": {
+      "platform_fee": {
+        "label":"平台服务费",
+        "type":"integer","unit":"分",
+        "formula":"contract_amount * platform_fee_rate"
+      },
+      "head_office_fee": {
+        "label":"总院管理费",
+        "type":"integer","unit":"分",
+        "formula":"contract_amount * head_office_fee_rate"
+      },
+      "executor_amount": {
+        "label":"执行体到账金额",
+        "type":"integer","unit":"分",
+        "formula":"settlement_amount - platform_fee - head_office_fee"
+      }
+    },
+    "input_resource_refs": {
+      "review_cert_utxo": {
+        "label":"审图合格证UTXO","kind":"REVIEW_CERT_UTXO","required":true,
+        "note":"RULE-002：必须有总院审图合格证",
+        "fields_needed":["cert_no","reviewer_ref","chief_engineer_ref","valid_until"]
+      },
+      "coordinate_proof_utxo": {
+        "label":"实测坐标证明UTXO","kind":"COORDINATE_PROOF_UTXO","required":true,
+        "fields_needed":["all_points_pass","measurement_date"]
+      },
+      "concrete_report_utxo": {
+        "label":"混凝土强度报告UTXO","kind":"CONCRETE_REPORT_UTXO","required":true,
+        "fields_needed":["strength_evaluation","all_pass"]
+      },
+      "contract_ref": {
+        "label":"合同引用","kind":"CONTRACT","required":true,
+        "note":"RULE-003：结算必须引用有效合同",
+        "fields_needed":["contract_no","amount","payment_nodes","status"]
+      },
+      "all_drawing_utxos": {
+        "label":"全套图纸UTXO","kind":"DRAWING_UTXO_SET","required":true,
+        "note":"RULE-005：所有子节点必须有实际产出",
+        "fields_needed":["pile_foundation","pile_cap","pier","superstructure","all_sealed"]
+      }
+    }
+  },
+
+  "process_unit": {
+    "total_steps": 4,
+    "steps": [
+      { "seq":1,"name":"UTXO完整性校验","skill":"utxo_chain_verify",
+        "inputs":["all_drawing_utxos","review_cert_utxo","coordinate_proof_utxo","concrete_report_utxo"],
+        "output_kind":"CHAIN_VERIFY_UTXO","auto_executable":true,"confidence_threshold":1.0,
+        "note":"RULE-005校验：桩基→承台→墩柱→上部结构→审图→坐标→强度，全链必须SEALED" },
+      { "seq":2,"name":"合同付款条件核验","skill":"payment_condition_check",
+        "inputs":["contract_ref","chain_verify_utxo"],
+        "output_kind":"PAYMENT_CHECK_UTXO","auto_executable":true,"confidence_threshold":1.0,
+        "note":"RULE-003校验：付款节点触发条件是否满足" },
+      { "seq":3,"name":"分账计算","skill":"split_calculation",
+        "inputs":["payment_check_utxo","contract_ref"],
+        "output_kind":"SPLIT_CALC_UTXO","auto_executable":true,"confidence_threshold":1.0,
+        "note":"按tenant.config的splitPolicy自动计算" },
+      { "seq":4,"name":"结算确认与钱包触发","skill":"settlement_confirm",
+        "inputs":["split_calc_utxo","chain_verify_utxo"],
+        "output_kind":"SETTLEMENT_CERT_UTXO","auto_executable":false,
+        "note":"双方确认后触发钱包到账，不可撤销" }
+    ]
+  },
+
+  "executor_requirement": {
+    "capability_level":"平台结算引擎",
+    "required_skills":["settlement","wallet_transfer","audit"],
+    "energy":{ "kind":"COMPUTE","base_days":0,"range_days":[0,0],"note":"自动化，无人工成本" },
+    "ai_executable":{
+      "full_auto_condition":"all_upstream_utxos SEALED AND payment_conditions met",
+      "assisted_condition":"N/A",
+      "human_required_condition":"dispute_case OR amount > threshold"
+    }
+  },
+
+  "acceptance_spec": {
+    "parameter_checks": [
+      { "check":"review_cert_utxo.status = SEALED","spec_ref":"RULE-002","blocking":true },
+      { "check":"contract_ref.status = ACTIVE","spec_ref":"RULE-003","blocking":true },
+      { "check":"all_drawing_utxos ALL SEALED","spec_ref":"RULE-005","blocking":true },
+      { "check":"settlement_amount <= contract_ref.remaining_amount","spec_ref":"RULE-003","blocking":true },
+      { "check":"payment_conditions_met","spec_ref":"RULE-003","blocking":true }
+    ],
+    "completeness_checks":[
+      "UTXO完整性校验通过",
+      "分账明细完整",
+      "双方签字确认"
+    ],
+    "evidence_required":[
+      { "kind":"CHAIN_VERIFY_UTXO","description":"UTXO链完整性证明","blocking":true },
+      { "kind":"PAYMENT_CHECK_UTXO","description":"付款条件核验","blocking":true },
+      { "kind":"SPLIT_CALC_UTXO","description":"分账计算明细","blocking":true }
+    ]
+  },
+
+  "utxo_state_machine": {
+    "states":["DRAFT","REVIEWED","APPROVED","SEALED","DELIVERABLE"],
+    "transitions":[
+      { "from":"DRAFT","to":"REVIEWED","condition":"RULE-002 + RULE-003 + RULE-005 ALL pass","auto":true },
+      { "from":"REVIEWED","to":"APPROVED","condition":"both_parties_confirmed","auto":false },
+      { "from":"APPROVED","to":"SEALED","condition":"wallet_transfer_executed","auto":true,
+        "note":"触发不可逆：钱到账，UTXO封印" },
+      { "from":"SEALED","to":"DELIVERABLE","condition":"ALWAYS","auto":true,
+        "note":"终态，结算完成，项目归档" }
+    ]
+  },
+
+  "wallet_trigger": {
+    "on_seal": [
+      { "to":"platform_wallet","amount":"platform_fee","note":"平台服务费" },
+      { "to":"head_office_wallet","amount":"head_office_fee","note":"总院管理费" },
+      { "to":"executor_wallet","amount":"executor_amount","note":"执行体到账" },
+      { "to":"escrow_wallet","amount":"quality_escrow","note":"质保金锁定，质保期满后释放" }
+    ]
+  },
+
+  "dispute_prc_value": "结算凭证UTXO封印后，整条证据链永久存档。任何争议查此UTXO即可得到完整的：合同→招采→Genesis→设计→施工→审图→坐标→强度→结算，全链不可篡改。",
+
+  "upstream_spu_refs":[
+    "v://zhongbei/spu/bridge/review_certificate@v1",
+    "v://zhongbei/spu/bridge/coordinate_proof@v1",
+    "v://zhongbei/spu/bridge/concrete_strength_report@v1"
+  ],
+  "downstream_spu_refs":[]
+}

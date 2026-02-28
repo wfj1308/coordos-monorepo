@@ -1,0 +1,6 @@
+{
+  "name": "@coordos/spu-runtime",
+  "version": "0.1.0",
+  "description": "SPU通用执行引擎",
+  "private": true
+}

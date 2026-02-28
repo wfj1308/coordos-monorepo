@@ -1,0 +1,8 @@
+go 1.22
+
+use (
+    ./packages/vuri
+    ./packages/project-core
+    ./services/vault-service
+    ./services/design-institute
+)

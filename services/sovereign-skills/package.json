@@ -1,0 +1,6 @@
+{
+  "name": "@coordos/sovereign-skills",
+  "version": "0.1.0",
+  "description": "CoordOS SPU skill implementations for bridge and road scenarios",
+  "private": true
+}

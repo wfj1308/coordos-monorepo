@@ -1,0 +1,128 @@
+{
+  "$schema": "https://coordos.io/schemas/spu/v1",
+  "spu_ref": "v://zhongbei/spu/bridge/review_certificate@v1",
+  "name": "审图合格证",
+  "version": "v1",
+  "domain": "bridge",
+  "stage": "设计审查",
+  "kind": "CERT",
+  "status": "ACTIVE",
+  "spec_basis": ["建质[2004]216号", "JTG D60-2015"],
+
+  "description": "CERT型SPU：总院审图合格证明。这是RULE-002（总院实质参与）的核心证据，也是委托链合规的关键节点。没有此UTXO，整个项目不能触发结算。",
+
+  "product_unit": {
+    "deliverables": [
+      { "name":"审图意见书","format":["PDF","JSON"],"required":true,
+        "completeness_check":["项目名称","图纸版本","审查意见列表","每条意见处理状态","审图工程师签字","总院公章","审图日期"] },
+      { "name":"图纸确认清单","format":["JSON"],"required":true,
+        "completeness_check":["图纸编号清单","版本号","每份图纸审查状态"] },
+      { "name":"审图合格证书","format":["PDF"],"required":true,
+        "completeness_check":["证书编号","项目信息","有效期","总院盖章","总工签字"] }
+    ]
+  },
+
+  "parameter_unit": {
+    "input_parameters": {
+      "review_type":         { "label":"审查类型","type":"enum",
+        "values":["PRELIMINARY","CONSTRUCTION","SPECIAL"],"default":"CONSTRUCTION" },
+      "reviewer_ref":        { "label":"主审工程师","type":"vref","required":true },
+      "chief_engineer_ref":  { "label":"总工程师","type":"vref","required":true },
+      "review_date":         { "label":"审图日期","type":"string","required":true },
+      "issue_count":         { "label":"审查意见总数","type":"integer" },
+      "major_issue_count":   { "label":"重大意见数","type":"integer" },
+      "resolved_count":      { "label":"已处理意见数","type":"integer" },
+      "cert_no":             { "label":"证书编号","type":"string","required":true },
+      "valid_until":         { "label":"有效期至","type":"string" }
+    },
+    "derived_parameters": {
+      "resolution_rate": {
+        "label":"意见处理率",
+        "type":"float","unit":"%",
+        "formula":"resolved_count / issue_count * 100",
+        "constraint":"= 100 OR (major_issue_count = 0 AND resolution_rate >= 95)"
+      }
+    },
+    "input_resource_refs": {
+      "design_utxo_set": { "label":"全套设计图纸UTXO","kind":"DRAWING_UTXO_SET","required":true,
+        "fields_needed":["drawing_list","version","completeness_check"] },
+      "calc_utxo_set":   { "label":"全套计算书UTXO","kind":"CALC_UTXO_SET","required":true,
+        "fields_needed":["structure_calc","load_calc","spec_compliance"] }
+    }
+  },
+
+  "process_unit": {
+    "total_steps": 4,
+    "steps": [
+      { "seq":1,"name":"图纸完整性检查","skill":"drawing_completeness_check",
+        "inputs":["design_utxo_set","calc_utxo_set"],
+        "output_kind":"COMPLETENESS_CHECK_UTXO","auto_executable":true,"confidence_threshold":1.0,
+        "note":"机器自动校验图纸清单完整性，人工确认" },
+      { "seq":2,"name":"技术审查","skill":"technical_review",
+        "inputs":["completeness_check_utxo","design_utxo_set","calc_utxo_set"],
+        "output_kind":"REVIEW_COMMENTS_UTXO","auto_executable":false,
+        "note":"必须由总院注册工程师执行，AI辅助发现问题" },
+      { "seq":3,"name":"意见处理确认","skill":"comment_resolution_check",
+        "inputs":["review_comments_utxo","design_utxo_set"],
+        "output_kind":"RESOLUTION_CHECK_UTXO","auto_executable":true,"confidence_threshold":0.95,
+        "note":"机器校验每条意见是否有对应修改记录" },
+      { "seq":4,"name":"合格证签发","skill":"cert_issuance",
+        "inputs":["resolution_check_utxo"],
+        "output_kind":"REVIEW_CERT_UTXO","auto_executable":false,
+        "note":"总工程师签字+总院公章，必须人工，不可代签" }
+    ]
+  },
+
+  "executor_requirement": {
+    "capability_level":"高级工程师及以上",
+    "min_experience_years":10,
+    "required_skills":["structural_review","bridge_design","code_compliance"],
+    "qualification":"注册结构工程师（必须）",
+    "energy":{ "kind":"LABOR","base_days":5,"range_days":[3,15] },
+    "head_office_only": true,
+    "note":"RULE-002核心：必须是总院执行体，分院无权签发",
+    "ai_executable":{
+      "full_auto_condition":"NEVER",
+      "assisted_condition":"AI辅助发现问题，人工判断和签字",
+      "human_required_condition":"ALWAYS"
+    }
+  },
+
+  "acceptance_spec": {
+    "parameter_checks": [
+      { "check":"major_issue_count = 0","spec_ref":"建质[2004]216号","blocking":true },
+      { "check":"resolution_rate = 100 OR (major_issue_count = 0 AND resolution_rate >= 95)",
+        "spec_ref":"建质[2004]216号","blocking":true },
+      { "check":"reviewer_ref in head_office_registered_engineers","spec_ref":"RULE-002","blocking":true },
+      { "check":"chief_engineer_ref in head_office_chief_engineers","spec_ref":"RULE-002","blocking":true }
+    ],
+    "completeness_checks":["cert_no present","head_office_seal verified","valid_until set"],
+    "evidence_required":[
+      { "kind":"REVIEW_COMMENTS_UTXO","description":"审查意见记录","blocking":true },
+      { "kind":"RESOLUTION_CHECK_UTXO","description":"意见处理记录","blocking":true },
+      { "kind":"HEAD_OFFICE_SEAL","description":"总院公章","blocking":true }
+    ]
+  },
+
+  "utxo_state_machine": {
+    "states":["DRAFT","REVIEWED","APPROVED","SEALED","DELIVERABLE"],
+    "transitions":[
+      { "from":"DRAFT","to":"REVIEWED","condition":"review_comments recorded","auto":true },
+      { "from":"REVIEWED","to":"APPROVED","condition":"resolution_rate pass AND chief_engineer_signed","auto":false },
+      { "from":"APPROVED","to":"SEALED","condition":"head_office_seal affixed","auto":false },
+      { "from":"SEALED","to":"DELIVERABLE","condition":"ALWAYS（此SPU本身即是RULE-002的证据）","auto":true }
+    ]
+  },
+
+  "rule_002_binding": {
+    "note":"此SPU是RULE-002的唯一满足方式",
+    "rule_check":"ProjectNode.status = SETTLED requires REVIEW_CERT_UTXO.status = SEALED",
+    "blocking":true
+  },
+
+  "upstream_spu_refs":[
+    "v://zhongbei/spu/bridge/superstructure_drawing@v1",
+    "v://zhongbei/spu/bridge/coordinate_proof@v1"
+  ],
+  "downstream_spu_refs":["v://zhongbei/spu/bridge/settlement_cert@v1"]
+}

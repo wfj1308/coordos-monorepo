@@ -1,0 +1,455 @@
+{
+  "$schema": "https://coordos.io/schemas/spu/v1",
+  "spu_ref": "v://zhongbei/spu/bridge/pile_foundation_drawing@v1",
+  "name": "桩基施工图",
+  "name_en": "Pile Foundation Drawing",
+  "version": "v1",
+  "domain": "bridge",
+  "stage": "施工图设计",
+  "kind": "DRAWING",
+  "status": "ACTIVE",
+  "created_at": "2026-02-26",
+  "spec_basis": ["JTG D63-2007", "JTG D60-2015", "JTG/T D65-2015"],
+
+  "description": "公路桥梁桩基础施工图设计标准产品单元，包含桩径桩长计算、配筋设计及施工图出图全过程",
+
+  "___DIMENSION_1___": "标准产品单元（要产出什么）",
+
+  "product_unit": {
+    "deliverables": [
+      {
+        "name": "桩基平面布置图",
+        "format": ["DWG", "PDF"],
+        "required": true,
+        "completeness_check": [
+          "桩位坐标标注",
+          "桩径标注",
+          "桩顶高程",
+          "承台轮廓"
+        ]
+      },
+      {
+        "name": "桩身配筋图",
+        "format": ["DWG", "PDF"],
+        "required": true,
+        "completeness_check": [
+          "主筋规格数量",
+          "箍筋间距",
+          "加密区范围",
+          "保护层厚度"
+        ]
+      },
+      {
+        "name": "桩顶构造详图",
+        "format": ["DWG", "PDF"],
+        "required": true,
+        "completeness_check": [
+          "桩顶嵌入承台深度",
+          "主筋锚入长度",
+          "桩顶破除范围"
+        ]
+      },
+      {
+        "name": "桩基工程量表",
+        "format": ["DWG", "XLSX"],
+        "required": true,
+        "completeness_check": [
+          "桩型",
+          "桩径",
+          "桩长",
+          "数量",
+          "混凝土方量",
+          "钢筋重量"
+        ]
+      },
+      {
+        "name": "桩基计算书",
+        "format": ["PDF", "JSON"],
+        "required": true,
+        "completeness_check": [
+          "地质参数取值依据",
+          "荷载取值",
+          "承载力计算过程",
+          "配筋计算过程",
+          "规范条文引用"
+        ]
+      }
+    ]
+  },
+
+  "___DIMENSION_2___": "标注参数单元（参数语义+约束）",
+
+  "parameter_unit": {
+    "input_parameters": {
+      "pile_diameter": {
+        "label": "桩径",
+        "type": "float",
+        "unit": "m",
+        "range": [0.8, 2.5],
+        "preferred_values": [0.8, 1.0, 1.2, 1.5, 1.8, 2.0],
+        "spec_ref": "JTG_D63_2007:5.1.2",
+        "note": "根据荷载和地质条件选取，优先选用标准桩径"
+      },
+      "pile_depth": {
+        "label": "桩长",
+        "type": "float",
+        "unit": "m",
+        "range": [10, 80],
+        "spec_ref": "JTG_D63_2007:5.3.1",
+        "depends_on": ["geology_bearing_layer_depth", "vertical_load"],
+        "note": "桩端必须进入持力层不少于规范要求深度"
+      },
+      "concrete_grade": {
+        "label": "桩身混凝土强度等级",
+        "type": "enum",
+        "values": ["C25", "C30", "C35", "C40"],
+        "default": "C30",
+        "spec_ref": "JTG_D63_2007:4.2.1",
+        "note": "水中桩不低于C30，腐蚀环境适当提高"
+      },
+      "rebar_grade": {
+        "label": "主筋钢筋等级",
+        "type": "enum",
+        "values": ["HRB400", "HRB500"],
+        "default": "HRB400",
+        "spec_ref": "JTG_D60_2015:appendix_A"
+      },
+      "main_rebar_count": {
+        "label": "主筋根数",
+        "type": "integer",
+        "range": [8, 40],
+        "step": 4,
+        "spec_ref": "JTG_D63_2007:5.4.2",
+        "note": "均匀布置，最小配筋率0.65%"
+      },
+      "main_rebar_diameter": {
+        "label": "主筋直径",
+        "type": "enum",
+        "unit": "mm",
+        "values": [16, 18, 20, 22, 25, 28, 32],
+        "spec_ref": "JTG_D63_2007:5.4.2"
+      },
+      "stirrup_spacing_normal": {
+        "label": "箍筋间距（非加密区）",
+        "type": "integer",
+        "unit": "mm",
+        "range": [100, 300],
+        "default": 200,
+        "spec_ref": "JTG_D63_2007:5.4.3"
+      },
+      "stirrup_spacing_dense": {
+        "label": "箍筋间距（加密区）",
+        "type": "integer",
+        "unit": "mm",
+        "range": [50, 150],
+        "default": 100,
+        "spec_ref": "JTG_D63_2007:5.4.3",
+        "note": "桩顶5D范围及液化土层范围内加密"
+      },
+      "cover_thickness": {
+        "label": "保护层厚度",
+        "type": "integer",
+        "unit": "mm",
+        "range": [40, 80],
+        "default": 50,
+        "spec_ref": "JTG_D63_2007:4.2.3",
+        "note": "水中环境不小于60mm，腐蚀环境适当增加"
+      }
+    },
+
+    "derived_parameters": {
+      "single_pile_bearing_capacity": {
+        "label": "单桩竖向承载力特征值",
+        "type": "float",
+        "unit": "kN",
+        "formula": "calc_bearing_capacity(pile_diameter, pile_depth, geology_data)",
+        "spec_ref": "JTG_D63_2007:5.3.3"
+      },
+      "rebar_ratio": {
+        "label": "主筋配筋率",
+        "type": "float",
+        "unit": "%",
+        "formula": "main_rebar_count * π*(main_rebar_diameter/2)^2 / (π*(pile_diameter/2)^2)",
+        "constraint": ">= 0.65",
+        "spec_ref": "JTG_D63_2007:5.4.2"
+      }
+    },
+
+    "input_resource_refs": {
+      "geology_utxo": {
+        "label": "地质勘察报告",
+        "kind": "GEOLOGY_SURVEY_REPORT",
+        "required": true,
+        "fields_needed": [
+          "bearing_layer_depth",
+          "bearing_capacity_standard",
+          "soil_friction_values",
+          "groundwater_level",
+          "corrosion_grade"
+        ]
+      },
+      "load_utxo": {
+        "label": "荷载计算书",
+        "kind": "LOAD_CALCULATION",
+        "required": true,
+        "fields_needed": [
+          "vertical_load_max",
+          "horizontal_load",
+          "moment_load",
+          "seismic_grade"
+        ]
+      },
+      "seismic_utxo": {
+        "label": "抗震设防参数",
+        "kind": "SEISMIC_PARAMS",
+        "required": false,
+        "condition": "seismic_grade >= 7",
+        "fields_needed": [
+          "seismic_intensity",
+          "site_class",
+          "liquefaction_assessment"
+        ]
+      }
+    }
+  },
+
+  "___DIMENSION_3___": "标准过程单元（生产过程怎么走）",
+
+  "process_unit": {
+    "total_steps": 5,
+    "steps": [
+      {
+        "seq": 1,
+        "name": "地质条件核查",
+        "skill": "geology_review",
+        "inputs": ["geology_utxo"],
+        "output_kind": "GEOLOGY_REVIEW_UTXO",
+        "output_fields": [
+          "bearing_layer_confirmed",
+          "bearing_capacity_adopted",
+          "corrosion_grade_confirmed",
+          "special_conditions"
+        ],
+        "executor_skill_required": "geology_interpretation",
+        "spec_ref": "JTG_D63_2007:3.1",
+        "auto_executable": false,
+        "note": "必须由具备地质判断能力的工程师执行，AI辅助"
+      },
+      {
+        "seq": 2,
+        "name": "桩径桩长计算",
+        "skill": "pile_dimension_calc",
+        "inputs": ["load_utxo", "geology_review_utxo"],
+        "output_kind": "PILE_DIMENSION_UTXO",
+        "output_fields": [
+          "pile_diameter",
+          "pile_depth",
+          "pile_count",
+          "bearing_capacity_calculated",
+          "calculation_process"
+        ],
+        "executor_skill_required": "pile_foundation_design",
+        "spec_ref": "JTG_D63_2007:5.3",
+        "auto_executable": true,
+        "confidence_threshold": 0.90,
+        "note": "标准地质条件下AI置信度>90%可全自动"
+      },
+      {
+        "seq": 3,
+        "name": "配筋计算",
+        "skill": "pile_rebar_calc",
+        "inputs": ["pile_dimension_utxo", "load_utxo", "seismic_utxo"],
+        "output_kind": "PILE_REBAR_UTXO",
+        "output_fields": [
+          "main_rebar_spec",
+          "stirrup_spec",
+          "rebar_ratio",
+          "calculation_process"
+        ],
+        "executor_skill_required": "rebar_design",
+        "spec_ref": "JTG_D63_2007:5.4",
+        "auto_executable": true,
+        "confidence_threshold": 0.92
+      },
+      {
+        "seq": 4,
+        "name": "施工图出图",
+        "skill": "pile_drawing_gen",
+        "inputs": ["pile_dimension_utxo", "pile_rebar_utxo"],
+        "output_kind": "PILE_DRAWING_UTXO",
+        "output_fields": [
+          "drawing_files",
+          "quantity_table"
+        ],
+        "executor_skill_required": "cad_drawing",
+        "auto_executable": true,
+        "confidence_threshold": 0.98,
+        "note": "出图为确定性操作，AI置信度极高"
+      },
+      {
+        "seq": 5,
+        "name": "自检校验",
+        "skill": "spu_self_validate",
+        "inputs": ["pile_drawing_utxo", "pile_dimension_utxo", "pile_rebar_utxo"],
+        "output_kind": "SELF_CHECK_UTXO",
+        "output_fields": [
+          "completeness_check_result",
+          "parameter_range_check",
+          "spec_compliance_check",
+          "issues_found"
+        ],
+        "auto_executable": true,
+        "confidence_threshold": 1.0,
+        "note": "机器自动执行，100%可自动化"
+      }
+    ]
+  },
+
+  "___EXECUTOR___": "执行体要求",
+
+  "executor_requirement": {
+    "capability_level": "助理工程师及以上",
+    "min_experience_years": 2,
+    "required_skills": [
+      "pile_foundation_design",
+      "bridge_structure",
+      "cad_drawing"
+    ],
+    "qualification": "结构工程师（初级及以上）",
+    "energy": {
+      "kind": "LABOR",
+      "base_days": 5,
+      "range_days": [3, 15],
+      "note": "含计算+出图+自检，复杂地质条件取上限"
+    },
+    "ai_executable": {
+      "full_auto_condition": "standard_geology AND seismic_grade < 7 AND pile_diameter <= 1.5",
+      "assisted_condition": "non_standard_geology OR seismic_grade >= 7",
+      "human_required_condition": "special_foundation OR karst_geology"
+    }
+  },
+
+  "___ACCEPTANCE___": "验收规格",
+
+  "acceptance_spec": {
+    "parameter_checks": [
+      {
+        "check": "pile_diameter IN [0.8, 2.5]",
+        "spec_ref": "JTG_D63_2007:5.1.2",
+        "blocking": true
+      },
+      {
+        "check": "rebar_ratio >= 0.65%",
+        "spec_ref": "JTG_D63_2007:5.4.2",
+        "blocking": true
+      },
+      {
+        "check": "bearing_capacity_calculated >= vertical_load_max * 1.25",
+        "spec_ref": "JTG_D63_2007:5.3.3",
+        "blocking": true
+      },
+      {
+        "check": "cover_thickness >= 50 OR (water_environment AND cover_thickness >= 60)",
+        "spec_ref": "JTG_D63_2007:4.2.3",
+        "blocking": true
+      }
+    ],
+
+    "completeness_checks": [
+      "product_unit.deliverables ALL present",
+      "all required fields in each deliverable present",
+      "spec_refs cited for all calculated parameters"
+    ],
+
+    "evidence_required": [
+      {
+        "kind": "GEOLOGY_REVIEW_UTXO",
+        "description": "地质核查记录",
+        "blocking": true
+      },
+      {
+        "kind": "PILE_DIMENSION_UTXO",
+        "description": "桩径桩长计算书",
+        "blocking": true
+      },
+      {
+        "kind": "PILE_REBAR_UTXO",
+        "description": "配筋计算书",
+        "blocking": true
+      },
+      {
+        "kind": "SELF_CHECK_UTXO",
+        "description": "自检校验记录",
+        "blocking": true
+      },
+      {
+        "kind": "REVIEWER_SIGNATURE_UTXO",
+        "description": "审核人签名（非全自动时必须）",
+        "blocking": false,
+        "condition": "NOT full_auto_condition"
+      }
+    ]
+  },
+
+  "___UTXO_STATES___": "UTXO状态机（由SPU验收条件驱动）",
+
+  "utxo_state_machine": {
+    "states": ["DRAFT", "REVIEWED", "APPROVED", "SEALED", "DELIVERABLE"],
+    "transitions": [
+      {
+        "from": "DRAFT",
+        "to": "REVIEWED",
+        "condition": "evidence_required ALL present",
+        "auto": true
+      },
+      {
+        "from": "REVIEWED",
+        "to": "APPROVED",
+        "condition": "acceptance_spec.parameter_checks ALL pass AND acceptance_spec.completeness_checks ALL pass",
+        "auto": true
+      },
+      {
+        "from": "APPROVED",
+        "to": "SEALED",
+        "condition": "GenesisUTXO.status = ACTIVE AND ProjectNode.status = DELIVERED",
+        "auto": false,
+        "note": "需要人工触发或总院审图通过后自动"
+      },
+      {
+        "from": "SEALED",
+        "to": "DELIVERABLE",
+        "condition": "RULE-002 pass",
+        "auto": true,
+        "note": "总院实质参与验证通过后进入结算链"
+      }
+    ]
+  },
+
+  "___DOWNSTREAM___": "下游 SPU（本 SPU 产出可作为哪些 SPU 的输入）",
+
+  "downstream_spu_refs": [
+    "v://zhongbei/spu/bridge/pile_cap_drawing@v1",
+    "v://zhongbei/spu/bridge/pile_construction_record@v1",
+    "v://zhongbei/spu/bridge/concealed_acceptance@v1"
+  ],
+
+  "___TRAINING___": "AI训练标注（UTXO历史数据的利用方式）",
+
+  "ai_training_spec": {
+    "input_features": [
+      "geology_utxo.bearing_capacity_standard",
+      "geology_utxo.bearing_layer_depth",
+      "load_utxo.vertical_load_max",
+      "load_utxo.seismic_grade"
+    ],
+    "output_targets": [
+      "pile_dimension_utxo.pile_diameter",
+      "pile_dimension_utxo.pile_depth",
+      "pile_rebar_utxo.main_rebar_spec"
+    ],
+    "label_source": "acceptance_spec review result (APPROVED=1, REJECTED=0)",
+    "confidence_calc": "approved_count / total_count WHERE same_geology_class AND same_load_range",
+    "min_samples_for_auto": 50,
+    "note": "每个APPROVED UTXO自动成为训练正样本，REJECTED+修改记录成为负样本+修正对"
+  }
+}

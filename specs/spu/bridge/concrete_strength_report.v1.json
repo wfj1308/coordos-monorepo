@@ -1,0 +1,105 @@
+{
+  "$schema": "https://coordos.io/schemas/spu/v1",
+  "spu_ref": "v://zhongbei/spu/bridge/concrete_strength_report@v1",
+  "name": "混凝土强度检测报告",
+  "version": "v1",
+  "domain": "bridge",
+  "stage": "施工过程",
+  "kind": "REPORT",
+  "status": "ACTIVE",
+  "spec_basis": ["JTG/T F50-2011", "GB/T 50784-2013", "JTG F80/1-2017"],
+
+  "description": "证据型SPU：混凝土试件强度检测结果存证，是结构验收的强制证明文件",
+
+  "product_unit": {
+    "deliverables": [
+      { "name":"混凝土强度检测报告","format":["PDF","JSON"],"required":true,
+        "completeness_check":["工程部位","配合比编号","浇筑日期","试件编号","28天强度","评定结论","检测单位盖章"] },
+      { "name":"试件留置记录","format":["JSON"],"required":true,
+        "completeness_check":["试件数量","留置位置","制作人员","养护条件"] }
+    ]
+  },
+
+  "parameter_unit": {
+    "input_parameters": {
+      "structure_part":      { "label":"工程部位","type":"string","required":true },
+      "design_strength":     { "label":"设计强度等级","type":"enum","values":["C25","C30","C35","C40","C45","C50","C55"] },
+      "pour_date":           { "label":"浇筑日期","type":"string","required":true },
+      "specimen_count":      { "label":"试件组数","type":"integer","range":[1,20] },
+      "actual_strength_avg": { "label":"实测平均强度","type":"float","unit":"MPa" },
+      "actual_strength_min": { "label":"实测最小强度","type":"float","unit":"MPa" },
+      "test_age":            { "label":"测试龄期","type":"integer","unit":"天","values":[7,14,28],"default":28 }
+    },
+    "derived_parameters": {
+      "strength_ratio": {
+        "label":"强度比（实测/设计）",
+        "type":"float",
+        "formula":"actual_strength_avg / design_strength_value",
+        "constraint":">= 1.15",
+        "spec_ref":"JTG/T_F50_2011:8.6.2"
+      }
+    },
+    "input_resource_refs": {
+      "mix_design_utxo":    { "label":"配合比设计报告","kind":"CONCRETE_MIX_DESIGN","required":true,
+        "fields_needed":["mix_ratio","water_cement_ratio","admixture"] },
+      "concealed_utxo":     { "label":"隐蔽验收记录","kind":"CONCEALED_ACCEPTANCE_UTXO","required":false,
+        "condition":"structure_part in [桩基,承台,墩柱,主梁]" }
+    }
+  },
+
+  "process_unit": {
+    "total_steps": 3,
+    "steps": [
+      { "seq":1,"name":"试件制作记录","skill":"specimen_creation_record",
+        "inputs":["mix_design_utxo"],
+        "output_kind":"SPECIMEN_RECORD_UTXO","auto_executable":false,
+        "note":"现场制作时同步记录，照片存证" },
+      { "seq":2,"name":"强度测试结果录入","skill":"strength_test_record",
+        "inputs":["specimen_record_utxo"],
+        "output_kind":"STRENGTH_DATA_UTXO","auto_executable":false,
+        "note":"检测机构出具报告后录入，可对接检测机构API自动导入" },
+      { "seq":3,"name":"强度评定","skill":"strength_evaluation",
+        "inputs":["strength_data_utxo","mix_design_utxo"],
+        "output_kind":"CONCRETE_REPORT_UTXO","auto_executable":true,"confidence_threshold":1.0,
+        "spec_ref":"JTG/T_F50_2011:8.6" }
+    ]
+  },
+
+  "executor_requirement": {
+    "capability_level":"试验员",
+    "required_skills":["concrete_testing","quality_inspection"],
+    "qualification":"混凝土试验员证书",
+    "energy":{ "kind":"LABOR","base_days":0.25,"range_days":[0.1,0.5],"note":"录入+评定" },
+    "ai_executable":{
+      "full_auto_condition":"testing_lab_api_connected",
+      "assisted_condition":"manual_input",
+      "human_required_condition":"dispute_case"
+    }
+  },
+
+  "acceptance_spec": {
+    "parameter_checks": [
+      { "check":"actual_strength_avg >= design_strength_value * 1.15","spec_ref":"JTG/T_F50_2011:8.6.2","blocking":true },
+      { "check":"actual_strength_min >= design_strength_value * 0.90","spec_ref":"JTG/T_F50_2011:8.6.2","blocking":true },
+      { "check":"specimen_count >= required_count","spec_ref":"JTG/T_F50_2011:8.5.1","blocking":true }
+    ],
+    "completeness_checks":["test_age = 28 OR waiver_approved","lab_seal present"],
+    "evidence_required":[
+      { "kind":"SPECIMEN_RECORD_UTXO","description":"试件制作记录","blocking":true },
+      { "kind":"STRENGTH_DATA_UTXO","description":"强度测试数据","blocking":true }
+    ]
+  },
+
+  "utxo_state_machine": {
+    "states":["DRAFT","REVIEWED","APPROVED","SEALED","DELIVERABLE"],
+    "transitions":[
+      { "from":"DRAFT","to":"REVIEWED","condition":"28day_results available","auto":true },
+      { "from":"REVIEWED","to":"APPROVED","condition":"strength_evaluation PASS","auto":true },
+      { "from":"APPROVED","to":"SEALED","condition":"lab_seal verified","auto":false },
+      { "from":"SEALED","to":"DELIVERABLE","condition":"RULE-002 pass","auto":true }
+    ]
+  },
+
+  "upstream_spu_refs":["v://zhongbei/spu/bridge/concealed_acceptance@v1"],
+  "downstream_spu_refs":["v://zhongbei/spu/bridge/coordinate_proof@v1"]
+}

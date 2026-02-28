@@ -1,0 +1,131 @@
+{
+  "$schema": "https://coordos.io/schemas/spu/v1",
+  "spu_ref": "v://zhongbei/spu/bridge/coordinate_proof@v1",
+  "name": "实测坐标证明",
+  "version": "v1",
+  "domain": "bridge",
+  "stage": "施工过程",
+  "kind": "PROVE",
+  "status": "ACTIVE",
+  "spec_basis": ["JTG F80/1-2017", "GB 50026-2007"],
+
+  "description": "PROVE型SPU：测量实体坐标与设计坐标的偏差存证。桥梁竣工验收的强制文件，偏差超标是最常见的质量纠纷来源。",
+
+  "product_unit": {
+    "deliverables": [
+      { "name":"实测坐标成果表","format":["JSON","XLSX","PDF"],"required":true,
+        "completeness_check":["桩号/墩号","设计坐标X/Y/Z","实测坐标X/Y/Z","偏差ΔX/ΔY/ΔZ","偏差是否合格","测量人员","仪器编号"] },
+      { "name":"控制点复测记录","format":["JSON"],"required":true,
+        "completeness_check":["控制点编号","复测坐标","与已知坐标偏差","复测结论"] },
+      { "name":"测量原始数据","format":["JSON"],"required":true,
+        "completeness_check":["全站仪读数","棱镜位置","测回数","闭合差"] }
+    ]
+  },
+
+  "parameter_unit": {
+    "input_parameters": {
+      "measurement_target":  { "label":"测量对象","type":"string","required":true,
+        "examples":["桩中心","承台中心","墩顶中心","支座中心"] },
+      "coordinate_system":   { "label":"坐标系","type":"string","default":"北京54/西安80/CGCS2000" },
+      "design_x":            { "label":"设计坐标X","type":"float","unit":"m" },
+      "design_y":            { "label":"设计坐标Y","type":"float","unit":"m" },
+      "design_z":            { "label":"设计高程Z","type":"float","unit":"m" },
+      "actual_x":            { "label":"实测坐标X","type":"float","unit":"m" },
+      "actual_y":            { "label":"实测坐标Y","type":"float","unit":"m" },
+      "actual_z":            { "label":"实测高程Z","type":"float","unit":"m" },
+      "instrument_model":    { "label":"全站仪型号","type":"string","required":true },
+      "instrument_cert_date":{ "label":"仪器检定日期","type":"string","required":true }
+    },
+    "derived_parameters": {
+      "delta_xy": {
+        "label":"平面偏差",
+        "type":"float","unit":"mm",
+        "formula":"sqrt((actual_x-design_x)^2 + (actual_y-design_y)^2) * 1000",
+        "constraint":"<= tolerance_xy",
+        "spec_ref":"JTG_F80/1_2017:附录B"
+      },
+      "delta_z": {
+        "label":"高程偏差",
+        "type":"float","unit":"mm",
+        "formula":"abs(actual_z - design_z) * 1000",
+        "constraint":"<= tolerance_z"
+      }
+    },
+    "tolerance_table": {
+      "note":"容差根据工程部位查规范附录B",
+      "pile_center":     { "xy_mm":50,  "z_mm":null },
+      "cap_center":      { "xy_mm":30,  "z_mm":10   },
+      "pier_top_center": { "xy_mm":20,  "z_mm":10   },
+      "bearing_center":  { "xy_mm":10,  "z_mm":5    }
+    },
+    "input_resource_refs": {
+      "design_drawing_utxo": { "label":"设计坐标文件","kind":"DRAWING_UTXO","required":true,
+        "fields_needed":["design_coordinates","coordinate_system","structure_part"] },
+      "control_point_utxo":  { "label":"测量控制点成果","kind":"SURVEY_CONTROL","required":true,
+        "fields_needed":["control_point_coords","accuracy_grade"] }
+    }
+  },
+
+  "process_unit": {
+    "total_steps": 4,
+    "steps": [
+      { "seq":1,"name":"控制点复测","skill":"control_point_check",
+        "inputs":["control_point_utxo"],
+        "output_kind":"CONTROL_CHECK_UTXO","auto_executable":false,
+        "note":"每次测量前必须复测控制点，确认控制点无移位" },
+      { "seq":2,"name":"实体坐标测量","skill":"coordinate_measurement",
+        "inputs":["control_check_utxo","design_drawing_utxo"],
+        "output_kind":"RAW_MEASUREMENT_UTXO","auto_executable":false,
+        "note":"全站仪测量，原始数据实时上传，不可事后补录" },
+      { "seq":3,"name":"偏差计算与评定","skill":"deviation_evaluation",
+        "inputs":["raw_measurement_utxo","design_drawing_utxo"],
+        "output_kind":"DEVIATION_RESULT_UTXO","auto_executable":true,"confidence_threshold":1.0,
+        "spec_ref":"JTG_F80/1_2017:附录B" },
+      { "seq":4,"name":"成果表生成","skill":"coordinate_report_gen",
+        "inputs":["deviation_result_utxo","control_check_utxo"],
+        "output_kind":"COORDINATE_PROOF_UTXO","auto_executable":true,"confidence_threshold":1.0 }
+    ]
+  },
+
+  "executor_requirement": {
+    "capability_level":"测量员",
+    "required_skills":["total_station_survey","coordinate_calculation"],
+    "qualification":"测量员证书",
+    "energy":{ "kind":"LABOR","base_days":0.5,"range_days":[0.25,2],"note":"根据测量点数量" },
+    "ai_executable":{
+      "full_auto_condition":"iot_total_station AND rtk_gps_connected",
+      "assisted_condition":"manual_total_station WITH digital_upload",
+      "human_required_condition":"always_human_surveyor"
+    }
+  },
+
+  "acceptance_spec": {
+    "parameter_checks": [
+      { "check":"delta_xy <= tolerance_xy[measurement_target]","spec_ref":"JTG_F80/1_2017:附录B","blocking":true },
+      { "check":"delta_z <= tolerance_z[measurement_target]","spec_ref":"JTG_F80/1_2017:附录B","blocking":true },
+      { "check":"instrument_calibration_valid","spec_ref":"GB_50026_2007:3.1","blocking":true },
+      { "check":"control_point_deviation <= 3mm","spec_ref":"GB_50026_2007:4.2","blocking":true }
+    ],
+    "completeness_checks":["all structure points measured","original data preserved"],
+    "evidence_required":[
+      { "kind":"CONTROL_CHECK_UTXO","description":"控制点复测记录","blocking":true },
+      { "kind":"RAW_MEASUREMENT_UTXO","description":"原始测量数据","blocking":true },
+      { "kind":"DEVIATION_RESULT_UTXO","description":"偏差计算结果","blocking":true }
+    ]
+  },
+
+  "utxo_state_machine": {
+    "states":["DRAFT","REVIEWED","APPROVED","SEALED","DELIVERABLE"],
+    "transitions":[
+      { "from":"DRAFT","to":"REVIEWED","condition":"all measurements recorded","auto":true },
+      { "from":"REVIEWED","to":"APPROVED","condition":"deviation_check ALL pass","auto":true },
+      { "from":"APPROVED","to":"SEALED","condition":"supervisor_countersign","auto":false },
+      { "from":"SEALED","to":"DELIVERABLE","condition":"RULE-002 pass","auto":true }
+    ]
+  },
+
+  "dispute_prc_value": "桥墩位置偏差是最常见的竣工验收争议。此UTXO保存原始测量数据+控制点复测+偏差计算全链，任何事后争议可完整还原当时测量现场。",
+
+  "upstream_spu_refs":["v://zhongbei/spu/bridge/concrete_strength_report@v1"],
+  "downstream_spu_refs":["v://zhongbei/spu/bridge/review_certificate@v1"]
+}

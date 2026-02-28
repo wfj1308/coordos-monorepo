@@ -1,0 +1,110 @@
+{
+  "$schema": "https://coordos.io/schemas/spu/v1",
+  "spu_ref": "v://zhongbei/spu/bridge/prestress_record@v1",
+  "name": "预应力张拉记录",
+  "version": "v1",
+  "domain": "bridge",
+  "stage": "施工过程",
+  "kind": "RECORD",
+  "status": "ACTIVE",
+  "spec_basis": ["JTG/T F50-2011", "JTG D60-2015"],
+
+  "description": "证据型SPU：记录预应力张拉施工过程，产出不可篡改的施工存证",
+
+  "product_unit": {
+    "deliverables": [
+      { "name":"预应力张拉记录表","format":["JSON","PDF"],"required":true,
+        "completeness_check":["束编号","张拉日期","设计张拉力","实测张拉力","伸长量","油压表读数","张拉人员签名"] },
+      { "name":"伸长量偏差分析","format":["JSON"],"required":true,
+        "completeness_check":["理论伸长量","实测伸长量","偏差率","是否合格"] },
+      { "name":"张拉过程照片存证","format":["JPEG","PNG"],"required":true,
+        "completeness_check":["张拉千斤顶照片","油压表读数照片","伸长量测量照片"] }
+    ]
+  },
+
+  "parameter_unit": {
+    "input_parameters": {
+      "tendon_id":           { "label":"钢绞线束编号","type":"string","required":true },
+      "design_tension_force":{ "label":"设计张拉力","type":"float","unit":"kN","range":[100,5000] },
+      "actual_tension_force":{ "label":"实测张拉力","type":"float","unit":"kN" },
+      "theoretical_elongation":{ "label":"理论伸长量","type":"float","unit":"mm" },
+      "actual_elongation":   { "label":"实测伸长量","type":"float","unit":"mm" },
+      "ambient_temperature": { "label":"施工环境温度","type":"float","unit":"°C","range":[-10,45] },
+      "jack_calibration_date":{ "label":"千斤顶标定日期","type":"string","note":"标定有效期不超过半年" }
+    },
+    "derived_parameters": {
+      "elongation_deviation": {
+        "label":"伸长量偏差率",
+        "type":"float","unit":"%",
+        "formula":"(actual_elongation - theoretical_elongation) / theoretical_elongation * 100",
+        "constraint":"abs(elongation_deviation) <= 6",
+        "spec_ref":"JTG/T_F50_2011:14.3.2"
+      }
+    },
+    "input_resource_refs": {
+      "superstructure_utxo": { "label":"上部结构施工图UTXO","kind":"SUPERSTRUCTURE_DRAWING_UTXO","required":true,
+        "fields_needed":["tendon_spec","design_tension_force","theoretical_elongation"] },
+      "material_cert_utxo":  { "label":"钢绞线材质证明","kind":"MATERIAL_CERT","required":true,
+        "fields_needed":["elastic_modulus","breaking_strength","batch_no"] }
+    }
+  },
+
+  "process_unit": {
+    "total_steps": 3,
+    "steps": [
+      { "seq":1,"name":"张拉前检查","skill":"pretension_pre_check",
+        "inputs":["superstructure_utxo","material_cert_utxo"],
+        "output_kind":"PRETENSION_CHECK_UTXO","auto_executable":false,
+        "note":"必须人工现场检查：千斤顶标定、孔道畅通、端部构造" },
+      { "seq":2,"name":"张拉数据记录","skill":"tension_data_record",
+        "inputs":["pretension_check_utxo"],
+        "output_kind":"TENSION_DATA_UTXO","auto_executable":false,
+        "note":"现场实时采集，IoT设备辅助（油压传感器+位移传感器）" },
+      { "seq":3,"name":"偏差分析与合格判定","skill":"tension_deviation_check",
+        "inputs":["tension_data_utxo","superstructure_utxo"],
+        "output_kind":"TENSION_RECORD_UTXO","auto_executable":true,"confidence_threshold":1.0,
+        "spec_ref":"JTG/T_F50_2011:14.3.2" }
+    ]
+  },
+
+  "executor_requirement": {
+    "capability_level":"施工技术人员",
+    "required_skills":["prestress_construction","site_inspection"],
+    "qualification":"预应力专项作业人员证书",
+    "energy":{ "kind":"LABOR","base_days":0.5,"range_days":[0.25,1],"note":"每束约半天" },
+    "ai_executable":{
+      "full_auto_condition":"iot_sensors_connected AND calibrated",
+      "assisted_condition":"manual_input WITH iot_verification",
+      "human_required_condition":"always_human_present"
+    }
+  },
+
+  "acceptance_spec": {
+    "parameter_checks": [
+      { "check":"abs(elongation_deviation) <= 6","spec_ref":"JTG/T_F50_2011:14.3.2","blocking":true },
+      { "check":"actual_tension_force >= design_tension_force * 0.95","spec_ref":"JTG_D60_2015:6.3","blocking":true },
+      { "check":"jack_calibration_valid","spec_ref":"JTG/T_F50_2011:14.2.1","blocking":true }
+    ],
+    "completeness_checks":["all tendon_ids recorded","all photos uploaded"],
+    "evidence_required":[
+      { "kind":"PRETENSION_CHECK_UTXO","description":"张拉前检查记录","blocking":true },
+      { "kind":"TENSION_DATA_UTXO","description":"张拉数据记录","blocking":true },
+      { "kind":"PHOTO_UTXO","description":"现场照片存证","blocking":true }
+    ]
+  },
+
+  "utxo_state_machine": {
+    "states":["DRAFT","REVIEWED","APPROVED","SEALED","DELIVERABLE"],
+    "transitions":[
+      { "from":"DRAFT","to":"REVIEWED","condition":"all steps completed AND photos uploaded","auto":true },
+      { "from":"REVIEWED","to":"APPROVED","condition":"elongation_deviation within spec","auto":true },
+      { "from":"APPROVED","to":"SEALED","condition":"supervisor_signature present","auto":false },
+      { "from":"SEALED","to":"DELIVERABLE","condition":"RULE-002 pass","auto":true }
+    ]
+  },
+
+  "dispute_prc_value": "张拉记录是预应力桥梁最常见的质量纠纷证据。每束UTXO链完整记录：谁张拉的、什么设备、什么时候、偏差多少。出现裂缝纠纷时自动生成完整举证链。",
+
+  "upstream_spu_refs":["v://zhongbei/spu/bridge/superstructure_drawing@v1"],
+  "downstream_spu_refs":["v://zhongbei/spu/bridge/concealed_acceptance@v1"]
+}

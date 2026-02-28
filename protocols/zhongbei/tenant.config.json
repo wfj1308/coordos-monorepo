@@ -1,0 +1,66 @@
+{
+  "tenantId": "zhongbei",
+  "name": "中北设计院",
+  "projectTree": {
+    "maxDepth": 5,
+    "headOfficeExecutorRef": "v://zhongbei/executor/head-office",
+    "procurementRules": [
+      {
+        "depth": 0,
+        "thresholdCNY": 0,
+        "mode": "OPEN_TENDER",
+        "note": "根项目层：必须公开招标"
+      },
+      {
+        "depth": 1,
+        "thresholdCNY": 200000000,
+        "mode": "OPEN_TENDER",
+        "note": "设计分包层：200万以上公开招标"
+      },
+      {
+        "depth": 1,
+        "thresholdCNY": 50000000,
+        "mode": "NEGOTIATE",
+        "note": "设计分包层：50-200万竞争性谈判"
+      },
+      {
+        "depth": 1,
+        "thresholdCNY": 0,
+        "mode": "DIRECT",
+        "note": "设计分包层：50万以下直接指派（需留痕）"
+      },
+      {
+        "depth": 2,
+        "thresholdCNY": 0,
+        "mode": "DIRECT",
+        "note": "专项层：直接指派，留痕即可"
+      }
+    ],
+    "complianceRequirements": {
+      "requireReviewUTXO": true,
+      "requireDeliveryUTXO": true,
+      "requireHeadInvoice": true
+    }
+  },
+  "executors": {
+    "platform": "v://zhongbei/executor/platform",
+    "headOffice": "v://zhongbei/executor/head-office",
+    "branches": [
+      "v://zhongbei/executor/branch-001",
+      "v://zhongbei/executor/branch-002"
+    ]
+  },
+  "splitPolicy": {
+    "platformFee": 0.03,
+    "headOfficeFee": 0.12,
+    "qualityEscrow": 0.05,
+    "branchShare": 0.80
+  },
+  "features": {
+    "reviewEnabled": true,
+    "invoiceEnabled": true,
+    "walletEnabled": true,
+    "achievementEnabled": true,
+    "multiCurrencyEnabled": false
+  }
+}

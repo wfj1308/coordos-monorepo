@@ -1,0 +1,240 @@
+openapi: 3.0.3
+info:
+  title: CoordOS Vault Service API
+  version: 0.2.0
+  description: |
+    OpenAPI baseline for `services/vault-service`.
+    Notes:
+    - All `/api/v1/*` endpoints require bearer token.
+    - Token format in current implementation is:
+      `{tenantID}:{actorRef}:{role1,role2}`.
+    - `ref` path parameters should be URL-safe identifiers.
+servers:
+  - url: http://localhost:8080
+    description: Local development
+tags:
+  - name: Health
+  - name: Project
+  - name: Genesis
+  - name: Event
+  - name: Settlement
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Service health check
+      operationId: vaultHealth
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /api/v1/projects:
+    post:
+      tags: [Project]
+      summary: Create root project
+      operationId: createRootProject
+      security: [{BearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ID, Name, OwnerRef]
+              properties:
+                ID: {type: string}
+                Name: {type: string}
+                OwnerRef: {type: string}
+      responses:
+        "201":
+          $ref: "#/components/responses/GenericSuccess"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/projects/{ref}/children:
+    post:
+      tags: [Project]
+      summary: Create child project
+      operationId: createChildProject
+      security: [{BearerAuth: []}]
+      parameters:
+        - $ref: "#/components/parameters/Ref"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GenericObject"
+      responses:
+        "201": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/projects/{ref}:
+    get:
+      tags: [Project]
+      summary: Get project with ancestors and children
+      operationId: getProject
+      security: [{BearerAuth: []}]
+      parameters:
+        - $ref: "#/components/parameters/Ref"
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/projects/{ref}/tree:
+    get:
+      tags: [Project]
+      summary: Get project tree recursively
+      operationId: getProjectTree
+      security: [{BearerAuth: []}]
+      parameters:
+        - $ref: "#/components/parameters/Ref"
+        - name: max_depth
+          in: query
+          schema:
+            type: integer
+            default: 10
+            minimum: 0
+            maximum: 32
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/projects/{ref}/status:
+    put:
+      tags: [Project]
+      summary: Transition project lifecycle status
+      operationId: transitionProjectStatus
+      security: [{BearerAuth: []}]
+      parameters:
+        - $ref: "#/components/parameters/Ref"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target]
+              properties:
+                target:
+                  type: string
+                  description: One of project-core lifecycle status values.
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/genesis/{ref}/fission:
+    post:
+      tags: [Genesis]
+      summary: Execute genesis fission
+      operationId: executeFission
+      security: [{BearerAuth: []}]
+      parameters:
+        - $ref: "#/components/parameters/Ref"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GenericObject"
+      responses:
+        "201": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/genesis/{ref}:
+    get:
+      tags: [Genesis]
+      summary: Get genesis by ref
+      operationId: getGenesis
+      security: [{BearerAuth: []}]
+      parameters:
+        - $ref: "#/components/parameters/Ref"
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/events:
+    post:
+      tags: [Event]
+      summary: Submit project event to rule engine
+      operationId: submitEvent
+      security: [{BearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_ref, verb]
+              properties:
+                event_id: {type: string}
+                project_ref: {type: string}
+                tenant_id: {type: string}
+                actor_ref: {type: string}
+                verb: {type: string}
+                timestamp: {type: string, format: date-time}
+                payload:
+                  type: object
+                  additionalProperties: true
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/projects/{ref}/settle:
+    post:
+      tags: [Settlement]
+      summary: Trigger settlement process
+      operationId: triggerSettle
+      security: [{BearerAuth: []}]
+      parameters:
+        - $ref: "#/components/parameters/Ref"
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: tenant:actor:roles
+  parameters:
+    Ref:
+      name: ref
+      in: path
+      required: true
+      schema:
+        type: string
+  schemas:
+    GenericObject:
+      type: object
+      additionalProperties: true
+    HealthResponse:
+      type: object
+      required: [status, service, timestamp]
+      properties:
+        status: {type: string, example: ok}
+        service: {type: string, example: vault-service}
+        timestamp: {type: string, format: date-time}
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error: {type: string}
+  responses:
+    GenericSuccess:
+      description: Success response
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/GenericObject"
+    ErrorResponse:
+      description: Error response
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"

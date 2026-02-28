@@ -1,0 +1,101 @@
+{
+  "$schema": "https://coordos.io/schemas/spu/v1",
+  "spu_ref": "v://zhongbei/spu/bridge/pile_cap_drawing@v1",
+  "name": "承台施工图",
+  "version": "v1",
+  "domain": "bridge",
+  "stage": "施工图设计",
+  "kind": "DRAWING",
+  "status": "ACTIVE",
+  "spec_basis": ["JTG D63-2007", "JTG D60-2015"],
+
+  "product_unit": {
+    "deliverables": [
+      { "name": "承台平面图", "format": ["DWG","PDF"], "required": true,
+        "completeness_check": ["承台尺寸标注","桩位布置","系梁关系"] },
+      { "name": "承台配筋图", "format": ["DWG","PDF"], "required": true,
+        "completeness_check": ["底板钢筋","侧面钢筋","拉钩间距","保护层"] },
+      { "name": "承台工程量表", "format": ["DWG","XLSX"], "required": true,
+        "completeness_check": ["混凝土方量","钢筋重量","模板面积"] }
+    ]
+  },
+
+  "parameter_unit": {
+    "input_parameters": {
+      "cap_length":    { "label":"承台长度","type":"float","unit":"m","range":[1.5,12],"spec_ref":"JTG_D63_2007:6.1" },
+      "cap_width":     { "label":"承台宽度","type":"float","unit":"m","range":[1.5,12],"spec_ref":"JTG_D63_2007:6.1" },
+      "cap_thickness": { "label":"承台厚度","type":"float","unit":"m","range":[0.8,3.5],"spec_ref":"JTG_D63_2007:6.2" },
+      "concrete_grade":{ "label":"混凝土等级","type":"enum","values":["C25","C30","C35","C40"],"default":"C30" },
+      "rebar_grade":   { "label":"钢筋等级","type":"enum","values":["HRB400","HRB500"],"default":"HRB400" },
+      "bottom_rebar_spacing": { "label":"底板钢筋间距","type":"integer","unit":"mm","range":[100,200],"default":150 },
+      "cover_thickness":      { "label":"保护层厚度","type":"integer","unit":"mm","range":[50,80],"default":60 }
+    },
+    "input_resource_refs": {
+      "pile_foundation_utxo": {
+        "label":"桩基施工图UTXO","kind":"PILE_DRAWING_UTXO","required":true,
+        "fields_needed":["pile_diameter","pile_count","pile_layout","bearing_capacity_calculated"]
+      },
+      "load_utxo": {
+        "label":"荷载计算书","kind":"LOAD_CALCULATION","required":true,
+        "fields_needed":["vertical_load_max","horizontal_load","moment_load"]
+      }
+    }
+  },
+
+  "process_unit": {
+    "total_steps": 4,
+    "steps": [
+      { "seq":1,"name":"承台尺寸计算","skill":"cap_dimension_calc",
+        "inputs":["pile_foundation_utxo","load_utxo"],
+        "output_kind":"CAP_DIMENSION_UTXO","auto_executable":true,"confidence_threshold":0.90,
+        "spec_ref":"JTG_D63_2007:6.1" },
+      { "seq":2,"name":"承台配筋计算","skill":"cap_rebar_calc",
+        "inputs":["cap_dimension_utxo","load_utxo"],
+        "output_kind":"CAP_REBAR_UTXO","auto_executable":true,"confidence_threshold":0.88,
+        "spec_ref":"JTG_D63_2007:6.3" },
+      { "seq":3,"name":"施工图出图","skill":"cap_drawing_gen",
+        "inputs":["cap_dimension_utxo","cap_rebar_utxo"],
+        "output_kind":"CAP_DRAWING_UTXO","auto_executable":true,"confidence_threshold":0.97 },
+      { "seq":4,"name":"自检校验","skill":"spu_self_validate",
+        "inputs":["cap_drawing_utxo","cap_dimension_utxo","cap_rebar_utxo"],
+        "output_kind":"SELF_CHECK_UTXO","auto_executable":true,"confidence_threshold":1.0 }
+    ]
+  },
+
+  "executor_requirement": {
+    "capability_level":"助理工程师及以上",
+    "required_skills":["pile_cap_design","bridge_structure"],
+    "energy":{ "kind":"LABOR","base_days":3,"range_days":[2,8] },
+    "ai_executable":{
+      "full_auto_condition":"standard_pile_layout AND pile_count <= 6",
+      "assisted_condition":"pile_count > 6 OR irregular_layout",
+      "human_required_condition":"special_load OR seismic_grade >= 8"
+    }
+  },
+
+  "acceptance_spec": {
+    "parameter_checks": [
+      { "check":"cap_thickness >= pile_diameter * 1.0","spec_ref":"JTG_D63_2007:6.2","blocking":true },
+      { "check":"bottom_rebar_spacing <= 200","spec_ref":"JTG_D63_2007:6.3","blocking":true }
+    ],
+    "completeness_checks":["product_unit.deliverables ALL present"],
+    "evidence_required": [
+      { "kind":"CAP_DIMENSION_UTXO","description":"承台尺寸计算书","blocking":true },
+      { "kind":"CAP_REBAR_UTXO","description":"配筋计算书","blocking":true },
+      { "kind":"SELF_CHECK_UTXO","description":"自检记录","blocking":true }
+    ]
+  },
+
+  "utxo_state_machine": {
+    "states":["DRAFT","REVIEWED","APPROVED","SEALED","DELIVERABLE"],
+    "transitions":[
+      { "from":"DRAFT","to":"REVIEWED","condition":"evidence_required ALL present","auto":true },
+      { "from":"REVIEWED","to":"APPROVED","condition":"parameter_checks ALL pass","auto":true },
+      { "from":"APPROVED","to":"SEALED","condition":"ProjectNode.status = DELIVERED","auto":false },
+      { "from":"SEALED","to":"DELIVERABLE","condition":"RULE-002 pass","auto":true }
+    ]
+  },
+
+  "upstream_spu_refs": ["v://zhongbei/spu/bridge/pile_foundation_drawing@v1"],
+  "downstream_spu_refs": ["v://zhongbei/spu/bridge/pier_rebar_drawing@v1"]
+}
