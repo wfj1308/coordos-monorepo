@@ -3,6 +3,7 @@ package report
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 )
 
@@ -75,12 +76,97 @@ type GatheringProgress struct {
 	CumulativeAmount float64
 }
 
+type QualificationReport struct {
+	GeneratedAt       time.Time          `json:"generated_at"`
+	ReportYear        int                `json:"report_year"`
+	Company           CompanyInfo        `json:"company"`
+	CompanyCerts      []CertRecord       `json:"company_certs"`
+	RegisteredPersons []RegisteredPerson `json:"registered_persons"`
+	ProjectRecords    []ProjectRecord    `json:"project_records"`
+	Finance           FinanceSummary     `json:"finance"`
+	ExpiryWarnings    []ExpiryItem       `json:"expiry_warnings"`
+}
+
+type CompanyInfo struct {
+	Name            string `json:"name"`
+	UnifiedCode     string `json:"unified_code"`
+	LegalRep        string `json:"legal_rep"`
+	TechDirector    string `json:"tech_director"`
+	Address         string `json:"address"`
+	Phone           string `json:"phone"`
+	EstablishedYear int    `json:"established_year"`
+}
+
+type CertRecord struct {
+	CertType   string `json:"cert_type"`
+	CertNo     string `json:"cert_no"`
+	IssuedBy   string `json:"issued_by"`
+	ValidFrom  string `json:"valid_from"`
+	ValidUntil string `json:"valid_until"`
+	Status     string `json:"status"`
+	Level      string `json:"level"`
+	Specialty  string `json:"specialty"`
+}
+
+type RegisteredPerson struct {
+	Name           string          `json:"name"`
+	CertType       string          `json:"cert_type"`
+	CertNo         string          `json:"cert_no"`
+	ValidUntil     string          `json:"valid_until"`
+	Specialty      string          `json:"specialty"`
+	RecentProjects []PersonProject `json:"recent_projects"`
+}
+
+type PersonProject struct {
+	ProjectName string `json:"project_name"`
+	Role        string `json:"role"`
+	Year        int    `json:"year"`
+	SPURef      string `json:"spu_ref"`
+}
+
+type ProjectRecord struct {
+	ProjectName    string  `json:"project_name"`
+	ContractNo     string  `json:"contract_no"`
+	ContractAmount float64 `json:"contract_amount"`
+	OwnerName      string  `json:"owner_name"`
+	CompletedYear  int     `json:"completed_year"`
+	ProjectType    string  `json:"project_type"`
+	ProofUTXORef   string  `json:"proof_utxo_ref"`
+}
+
+type FinanceSummary struct {
+	Year1          int     `json:"year1"`
+	Year1Gathering float64 `json:"year1_gathering"`
+	Year2          int     `json:"year2"`
+	Year2Gathering float64 `json:"year2_gathering"`
+	Year3          int     `json:"year3"`
+	Year3Gathering float64 `json:"year3_gathering"`
+}
+
+type ExpiryItem struct {
+	HolderName string `json:"holder_name"`
+	CertType   string `json:"cert_type"`
+	CertNo     string `json:"cert_no"`
+	ValidUntil string `json:"valid_until"`
+	DaysLeft   int    `json:"days_left"`
+}
+
+type RiskEvent struct {
+	EventType  string    `json:"event_type"`
+	Severity   string    `json:"severity"`
+	EntityRef  string    `json:"entity_ref"`
+	Message    string    `json:"message"`
+	OccurredAt time.Time `json:"occurred_at"`
+}
+
 type Store interface {
 	GetOverview(ctx context.Context, tenantID int, from, to time.Time) (*Overview, error)
 	GetCompanyReport(ctx context.Context, tenantID int, from, to time.Time) ([]*CompanyReport, error)
 	GetContractAnalysis(ctx context.Context, tenantID int, contractID int64) (*ContractAnalysis, error)
 	GetGatheringProgress(ctx context.Context, tenantID int, year int) ([]*GatheringProgress, error)
 	GetEmployeeReport(ctx context.Context, tenantID int, from, to time.Time) ([]*EmployeeReport, error)
+	GetQualificationReport(ctx context.Context, tenantID int, reportYear int) (*QualificationReport, error)
+	GetRiskEvents(ctx context.Context, tenantID int, from time.Time) ([]*RiskEvent, error)
 }
 
 type Service struct {
@@ -116,6 +202,21 @@ func (s *Service) GetGatheringProgress(ctx context.Context, year int) ([]*Gather
 
 func (s *Service) GetEmployeeReport(ctx context.Context, from, to time.Time) ([]*EmployeeReport, error) {
 	return s.store.GetEmployeeReport(ctx, s.tenantID, from, to)
+}
+
+func (s *Service) GetQualificationReport(ctx context.Context, reportYear int) (*QualificationReport, error) {
+	return s.store.GetQualificationReport(ctx, s.tenantID, reportYear)
+}
+
+func (s *Service) GetRiskEvents(ctx context.Context, days int) ([]*RiskEvent, error) {
+	if days <= 0 {
+		days = 30
+	}
+	if days > 365 {
+		days = 365
+	}
+	from := time.Now().AddDate(0, 0, -days)
+	return s.store.GetRiskEvents(ctx, s.tenantID, from)
 }
 
 func (s *PGStore) GetOverview(ctx context.Context, tenantID int, from, to time.Time) (*Overview, error) {
@@ -353,4 +454,272 @@ func (s *PGStore) GetEmployeeReport(ctx context.Context, tenantID int, from, to 
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+func (s *PGStore) GetQualificationReport(ctx context.Context, tenantID int, reportYear int) (*QualificationReport, error) {
+	now := time.Now()
+	r := &QualificationReport{
+		GeneratedAt: now,
+		ReportYear:  reportYear,
+	}
+
+	row := s.db.QueryRowContext(ctx, `
+		SELECT name, COALESCE(note,''), COALESCE(phone,'')
+		FROM companies
+		WHERE company_type=1 AND tenant_id=$1 AND deleted=FALSE
+		LIMIT 1`,
+		tenantID,
+	)
+	var companyName, unifiedCode, phone string
+	if err := row.Scan(&companyName, &unifiedCode, &phone); err == nil {
+		r.Company = CompanyInfo{
+			Name:        companyName,
+			UnifiedCode: unifiedCode,
+			Phone:       phone,
+		}
+	}
+
+	certRows, err := s.db.QueryContext(ctx, `
+		SELECT qual_type, cert_no, COALESCE(issued_by,''),
+		       COALESCE(TO_CHAR(valid_from,'YYYY-MM-DD'),''),
+		       COALESCE(TO_CHAR(valid_until,'YYYY-MM-DD'),'长期'),
+		       status, COALESCE(level,''), COALESCE(specialty,'')
+		FROM qualifications
+		WHERE holder_type='COMPANY' AND tenant_id=$1
+		  AND status IN ('VALID','EXPIRE_SOON','APPLYING')
+		  AND deleted=FALSE
+		ORDER BY qual_type`,
+		tenantID,
+	)
+	if err == nil {
+		defer certRows.Close()
+		for certRows.Next() {
+			c := CertRecord{}
+			if err := certRows.Scan(
+				&c.CertType, &c.CertNo, &c.IssuedBy,
+				&c.ValidFrom, &c.ValidUntil, &c.Status, &c.Level, &c.Specialty,
+			); err == nil {
+				r.CompanyCerts = append(r.CompanyCerts, c)
+			}
+		}
+	}
+
+	threeYearsAgo := time.Date(reportYear-3, 1, 1, 0, 0, 0, 0, time.UTC)
+	personRows, err := s.db.QueryContext(ctx, `
+		SELECT q.holder_name, q.qual_type, q.cert_no,
+		       COALESCE(TO_CHAR(q.valid_until,'YYYY-MM-DD'),'长期'),
+		       COALESCE(q.specialty,''), COALESCE(q.executor_ref,'')
+		FROM qualifications q
+		WHERE q.holder_type='PERSON'
+		  AND q.tenant_id=$1
+		  AND q.status IN ('VALID','EXPIRE_SOON')
+		  AND q.deleted=FALSE
+		  AND q.qual_type LIKE 'REG_%'
+		ORDER BY q.qual_type, q.holder_name`,
+		tenantID,
+	)
+	if err == nil {
+		defer personRows.Close()
+		for personRows.Next() {
+			p := RegisteredPerson{}
+			var executorRef string
+			if err := personRows.Scan(&p.Name, &p.CertType, &p.CertNo, &p.ValidUntil, &p.Specialty, &executorRef); err != nil {
+				continue
+			}
+
+			if executorRef != "" {
+				projRows, err := s.db.QueryContext(ctx, `
+					SELECT COALESCE(pn.name,'未知项目'), a.spu_ref,
+					       EXTRACT(YEAR FROM a.ingested_at)::int
+					FROM achievement_utxos a
+					LEFT JOIN project_nodes pn ON pn.ref = a.project_ref
+					WHERE a.executor_ref=$1
+					  AND a.ingested_at >= $2
+					  AND a.status != 'DISPUTED'
+					ORDER BY a.ingested_at DESC
+					LIMIT 10`,
+					executorRef, threeYearsAgo,
+				)
+				if err == nil {
+					for projRows.Next() {
+						pp := PersonProject{}
+						if err := projRows.Scan(&pp.ProjectName, &pp.SPURef, &pp.Year); err == nil {
+							pp.Role = roleFromSPU(pp.SPURef)
+							p.RecentProjects = append(p.RecentProjects, pp)
+						}
+					}
+					projRows.Close()
+				}
+			}
+			r.RegisteredPersons = append(r.RegisteredPersons, p)
+		}
+	}
+
+	projectRows, err := s.db.QueryContext(ctx, `
+		SELECT c.contract_name, c.num, c.contract_balance,
+		       COALESCE(c.signing_subject,''),
+		       EXTRACT(YEAR FROM COALESCE(s.updated_at, c.created_at))::int,
+		       COALESCE(a.utxo_ref,'')
+		FROM contracts c
+		LEFT JOIN settlements s ON s.contract_id=c.id AND s.state='PAID'
+		LEFT JOIN achievement_utxos a ON a.contract_id=c.id AND a.spu_ref LIKE '%settlement_cert%'
+		WHERE c.tenant_id=$1
+		  AND c.contract_balance >= 500000
+		  AND c.created_at >= $2
+		  AND c.deleted=FALSE
+		ORDER BY c.contract_balance DESC
+		LIMIT 30`,
+		tenantID, threeYearsAgo,
+	)
+	if err == nil {
+		defer projectRows.Close()
+		for projectRows.Next() {
+			pr := ProjectRecord{}
+			if err := projectRows.Scan(
+				&pr.ProjectName, &pr.ContractNo, &pr.ContractAmount,
+				&pr.OwnerName, &pr.CompletedYear, &pr.ProofUTXORef,
+			); err == nil {
+				pr.ProjectType = inferProjectType(pr.ProjectName)
+				r.ProjectRecords = append(r.ProjectRecords, pr)
+			}
+		}
+	}
+
+	for i, y := range []int{reportYear - 3, reportYear - 2, reportYear - 1} {
+		var total float64
+		_ = s.db.QueryRowContext(ctx, `
+			SELECT COALESCE(SUM(gathering_money),0)
+			FROM gatherings
+			WHERE tenant_id=$1
+			  AND EXTRACT(YEAR FROM created_at)=$2`,
+			tenantID, y,
+		).Scan(&total)
+		switch i {
+		case 0:
+			r.Finance.Year1, r.Finance.Year1Gathering = y, total
+		case 1:
+			r.Finance.Year2, r.Finance.Year2Gathering = y, total
+		case 2:
+			r.Finance.Year3, r.Finance.Year3Gathering = y, total
+		}
+	}
+
+	deadline := now.Add(90 * 24 * time.Hour)
+	warnRows, err := s.db.QueryContext(ctx, `
+		SELECT holder_name, qual_type, cert_no,
+		       TO_CHAR(valid_until,'YYYY-MM-DD'),
+		       (valid_until::date - CURRENT_DATE)::int
+		FROM qualifications
+		WHERE tenant_id=$1 AND deleted=FALSE
+		  AND status IN ('VALID','EXPIRE_SOON')
+		  AND valid_until IS NOT NULL
+		  AND valid_until <= $2
+		ORDER BY valid_until`,
+		tenantID, deadline,
+	)
+	if err == nil {
+		defer warnRows.Close()
+		for warnRows.Next() {
+			w := ExpiryItem{}
+			if err := warnRows.Scan(&w.HolderName, &w.CertType, &w.CertNo, &w.ValidUntil, &w.DaysLeft); err == nil {
+				r.ExpiryWarnings = append(r.ExpiryWarnings, w)
+			}
+		}
+	}
+
+	return r, nil
+}
+
+func (s *PGStore) GetRiskEvents(ctx context.Context, tenantID int, from time.Time) ([]*RiskEvent, error) {
+	expireDeadline := time.Now().Add(60 * 24 * time.Hour)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT event_type, severity, entity_ref, message, occurred_at
+		FROM (
+			SELECT
+				'CONTRACT_OVERPAID' AS event_type,
+				'HIGH' AS severity,
+				COALESCE(c.num, 'contract-' || c.id::text) AS entity_ref,
+				'contract settled amount exceeds contract balance' AS message,
+				COALESCE(c.updated_at, c.created_at) AS occurred_at
+			FROM contracts c
+			WHERE c.tenant_id=$1
+			  AND c.deleted=FALSE
+			  AND COALESCE(c.totle_balance, 0) > COALESCE(c.contract_balance, 0)
+			  AND COALESCE(c.updated_at, c.created_at) >= $2
+
+			UNION ALL
+
+			SELECT
+				'APPROVAL_REJECTED' AS event_type,
+				'MEDIUM' AS severity,
+				COALESCE(f.title, f.biz_type || '-' || f.biz_id::text) AS entity_ref,
+				'approval flow rejected' AS message,
+				COALESCE(f.finished_at, f.updated_at, f.created_at) AS occurred_at
+			FROM approve_flows f
+			WHERE f.tenant_id=$1
+			  AND f.state='REJECTED'
+			  AND COALESCE(f.finished_at, f.updated_at, f.created_at) >= $2
+
+			UNION ALL
+
+			SELECT
+				'QUALIFICATION_EXPIRING' AS event_type,
+				'LOW' AS severity,
+				COALESCE(q.cert_no, q.qual_type || '-' || q.id::text) AS entity_ref,
+				'qualification expires within 60 days' AS message,
+				COALESCE(q.valid_until, q.updated_at, q.created_at) AS occurred_at
+			FROM qualifications q
+			WHERE q.tenant_id=$1
+			  AND q.deleted=FALSE
+			  AND q.valid_until IS NOT NULL
+			  AND q.status IN ('VALID', 'EXPIRE_SOON')
+			  AND q.valid_until <= $3
+			  AND COALESCE(q.updated_at, q.created_at) >= $2
+		) t
+		ORDER BY occurred_at DESC
+		LIMIT 200`,
+		tenantID, from, expireDeadline,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []*RiskEvent
+	for rows.Next() {
+		e := &RiskEvent{}
+		if err := rows.Scan(&e.EventType, &e.Severity, &e.EntityRef, &e.Message, &e.OccurredAt); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+func roleFromSPU(spuRef string) string {
+	switch {
+	case strings.Contains(spuRef, "review_certificate"):
+		return "REVIEWER"
+	case strings.Contains(spuRef, "settlement_cert"):
+		return "MANAGER"
+	case strings.Contains(spuRef, "drawing"):
+		return "DESIGNER"
+	case strings.Contains(spuRef, "acceptance"):
+		return "INSPECTOR"
+	default:
+		return "ENGINEER"
+	}
+}
+
+func inferProjectType(name string) string {
+	switch {
+	case strings.Contains(name, "桥"):
+		return "BRIDGE"
+	case strings.Contains(name, "隧道"), strings.Contains(name, "隧"):
+		return "TUNNEL"
+	case strings.Contains(name, "公路"), strings.Contains(name, "高速"), strings.Contains(name, "路"):
+		return "ROAD"
+	default:
+		return "GENERAL"
+	}
 }

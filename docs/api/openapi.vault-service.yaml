@@ -17,6 +17,7 @@ tags:
   - name: Project
   - name: Genesis
   - name: Event
+  - name: UTXO
   - name: Settlement
 paths:
   /health:
@@ -145,6 +146,38 @@ paths:
         "201": {$ref: "#/components/responses/GenericSuccess"}
         default: {$ref: "#/components/responses/ErrorResponse"}
 
+  /api/v1/genesis:
+    post:
+      tags: [Genesis]
+      summary: Create root genesis UTXO manually for a project
+      operationId: createGenesis
+      security: [{BearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_ref, total_quota]
+              properties:
+                ref: {type: string}
+                project_ref: {type: string}
+                total_quota: {type: integer}
+                quota_unit: {type: string}
+                unit_price: {type: integer}
+                price_tolerance: {type: number}
+                allowed_executors:
+                  type: array
+                  items: {type: string}
+                allowed_skills:
+                  type: array
+                  items: {type: string}
+                quality_standard: {type: string}
+                quality_threshold: {type: integer}
+      responses:
+        "201": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
   /api/v1/genesis/{ref}:
     get:
       tags: [Genesis]
@@ -180,6 +213,91 @@ paths:
                 payload:
                   type: object
                   additionalProperties: true
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/utxo/ingest:
+    post:
+      tags: [UTXO]
+      summary: Ingest UTXO produced by SPU runtime
+      operationId: ingestUTXO
+      security: [{BearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [spu_ref, project_ref, executor_ref, payload]
+              properties:
+                utxo_ref: {type: string}
+                spu_ref: {type: string}
+                project_ref: {type: string}
+                parcel_ref: {type: string}
+                genesis_ref: {type: string}
+                executor_ref: {type: string}
+                kind: {type: string}
+                status: {type: string}
+                prev_hash: {type: string}
+                proof_hash: {type: string}
+                payload:
+                  type: object
+                  additionalProperties: true
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [utxo_ref, project_ref, status, proof_hash, auto_archive]
+                properties:
+                  utxo_ref: {type: string}
+                  project_ref: {type: string}
+                  status: {type: string}
+                  proof_hash: {type: string}
+                  executor_verify:
+                    type: string
+                    description: Executor compliance verification result before ingest.
+                    enum: [skipped, passed, failed_open]
+                  executor_verify_info: {type: string}
+                  auto_archive:
+                    type: string
+                    enum: [skipped, completed, failed]
+                  auto_archive_error: {type: string}
+        "403":
+          description: Executor verification rejected (ingest blocked)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error, executor_verify]
+                properties:
+                  error: {type: string}
+                  executor_verify: {type: string, enum: [failed]}
+                  detail: {type: string}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/utxos:
+    get:
+      tags: [UTXO]
+      summary: Query UTXO by ref or list by project/parcel
+      operationId: queryUTXOs
+      security: [{BearerAuth: []}]
+      parameters:
+        - name: ref
+          in: query
+          schema: {type: string}
+          description: Exact UTXO ref lookup.
+        - name: project_ref
+          in: query
+          schema: {type: string}
+          description: List UTXOs under a project ref.
+        - name: parcel_ref
+          in: query
+          schema: {type: string}
+          description: List UTXOs under a parcel ref.
       responses:
         "200": {$ref: "#/components/responses/GenericSuccess"}
         default: {$ref: "#/components/responses/ErrorResponse"}

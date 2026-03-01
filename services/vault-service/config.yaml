@@ -12,5 +12,5 @@ mysql:
   dsn: "root:YOUR_MYSQL_PASSWORD@tcp(localhost:3306)/icrm?charset=utf8mb4&parseTime=true&loc=Local"
 
 storage:
-  backend: "sqlite"
-  sqlite_path: "./coordos.db"
+  backend: "rocksdb"
+  rocks_path: "./coordos_vault_rocks_native.json"

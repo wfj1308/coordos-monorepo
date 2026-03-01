@@ -1,0 +1,49 @@
+# Go build/module cache and telemetry (generated locally)
+/.gocache/
+/.gomodcache/
+/.gotelemetry/
+/.appdata/
+/.tmp/
+
+# Runtime logs and migration logs (generated locally)
+/logs/
+/migration_*.log
+
+# Generated qualification reports and Office temp lock files
+/qualification_report_*.docx
+/~$*.docx
+
+# Temporary docx processing dirs
+/tmp_docx_extract/
+/tmp_docx_input/
+
+# Python cache artifacts
+__pycache__/
+*.py[cod]
+
+# Local vault database
+/coordos.db
+/coordos_vault_rocks_native.json
+
+# UI build/deps
+/ui/design-institute/node_modules/
+/ui/design-institute/dist/
+
+# Local runtime temp
+/tmp_logs/
+
+# Do not commit tests (per repo policy)
+*_test.go
+*.test.js
+*.test.ts
+*.test.tsx
+*.spec.js
+*.spec.ts
+*.spec.tsx
+/scripts/*test*.sh
+/scripts/*test*.ps1
+/scripts/*e2e*.sh
+/scripts/*e2e*.ps1
+/scripts/*smoke*.sh
+/scripts/*smoke*.ps1
+

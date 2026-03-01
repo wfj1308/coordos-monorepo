@@ -1,6 +1,7 @@
 go 1.22
 
 use (
+    ./packages/resolver
     ./packages/vuri
     ./packages/project-core
     ./services/vault-service

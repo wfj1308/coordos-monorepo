@@ -28,7 +28,7 @@ var seq atomic.Uint64
 // DB is a native file-backed implementation used by the "rocksdb" backend.
 //
 // Design notes:
-//  1. We intentionally avoid sqlite here to satisfy the "native backend" target.
+//  1. Native file-backed persistence keeps the backend self-contained.
 //  2. State is persisted as a single JSON snapshot for deterministic recovery.
 //  3. All write paths are serialized under one mutex and flushed atomically.
 //  4. This keeps behavior stable today and leaves a clear migration path to

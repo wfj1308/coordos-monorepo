@@ -4,5 +4,11 @@ server:
 tenant:
   id: 10000
 
+spu:
+  catalog_path: "specs/spu/bridge/catalog.v1.json"
+
+resolve:
+  head_office_ref: "v://zhongbei/executor/headquarters"
+
 postgres:
   dsn: "postgres://coordos:coordos@localhost:5432/coordos?sslmode=disable"

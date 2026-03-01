@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -90,6 +91,7 @@ type Store interface {
 	SumByContract(ctx context.Context, contractID int64) (float64, error)
 	SumByProject(ctx context.Context, projectRef string) (float64, error)
 	SetUTXORef(ctx context.Context, id int64, utxoRef string) error
+	SetUTXORefByProject(ctx context.Context, projectRef, utxoRef string) (int64, error)
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -180,6 +182,17 @@ func (s *Service) MarkPaid(ctx context.Context, id int64, payDate time.Time, ban
 // RULE-005：有产出UTXO才能结算，触发后挂 utxo_ref
 func (s *Service) TriggerFromUTXO(ctx context.Context, id int64, utxoRef string) error {
 	return s.store.SetUTXORef(ctx, id, utxoRef)
+}
+
+// TriggerFromUTXOByProject binds the latest settlement entry (without utxo_ref)
+// under a project to the given utxo_ref.
+func (s *Service) TriggerFromUTXOByProject(ctx context.Context, projectRef, utxoRef string) (int64, error) {
+	projectRef = strings.TrimSpace(projectRef)
+	utxoRef = strings.TrimSpace(utxoRef)
+	if projectRef == "" || utxoRef == "" {
+		return 0, fmt.Errorf("project_ref and utxo_ref are required")
+	}
+	return s.store.SetUTXORefByProject(ctx, projectRef, utxoRef)
 }
 
 func (s *Service) Get(ctx context.Context, id int64) (*Balance, error) {
@@ -277,13 +290,19 @@ func (s *PGStore) List(ctx context.Context, f BalanceFilter) ([]*Balance, int, e
 	args := []any{f.TenantID}
 	i := 2
 	if f.ContractID != nil {
-		where += fmt.Sprintf(" AND contract_id=$%d", i); args = append(args, *f.ContractID); i++
+		where += fmt.Sprintf(" AND contract_id=$%d", i)
+		args = append(args, *f.ContractID)
+		i++
 	}
 	if f.ProjectRef != nil {
-		where += fmt.Sprintf(" AND project_ref=$%d", i); args = append(args, *f.ProjectRef); i++
+		where += fmt.Sprintf(" AND project_ref=$%d", i)
+		args = append(args, *f.ProjectRef)
+		i++
 	}
 	if f.State != nil {
-		where += fmt.Sprintf(" AND state=$%d", i); args = append(args, *f.State); i++
+		where += fmt.Sprintf(" AND state=$%d", i)
+		args = append(args, *f.State)
+		i++
 	}
 
 	var total int
@@ -347,4 +366,28 @@ func (s *PGStore) SetUTXORef(ctx context.Context, id int64, utxoRef string) erro
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE balances SET utxo_ref=$1, updated_at=NOW() WHERE id=$2`, utxoRef, id)
 	return err
+}
+
+func (s *PGStore) SetUTXORefByProject(ctx context.Context, projectRef, utxoRef string) (int64, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx, `
+		WITH picked AS (
+			SELECT id
+			  FROM balances
+			 WHERE project_ref=$1
+			   AND (utxo_ref IS NULL OR utxo_ref='')
+			 ORDER BY created_at DESC, id DESC
+			 LIMIT 1
+		)
+		UPDATE balances b
+		   SET utxo_ref=$2, updated_at=NOW()
+		  FROM picked
+		 WHERE b.id=picked.id
+		RETURNING b.id`,
+		projectRef, utxoRef,
+	).Scan(&id)
+	if err == sql.ErrNoRows {
+		return 0, fmt.Errorf("no settlement row to bind for project_ref=%s", projectRef)
+	}
+	return id, err
 }

@@ -25,8 +25,8 @@ type Config struct {
 		DSN string `yaml:"dsn"`
 	} `yaml:"mysql"`
 	Storage struct {
-		Backend    string `yaml:"backend"`
-		SQLitePath string `yaml:"sqlite_path"`
+		Backend   string `yaml:"backend"`
+		RocksPath string `yaml:"rocks_path"`
 	} `yaml:"storage"`
 }
 
@@ -55,8 +55,8 @@ func defaultConfig() Config {
 	c.Tenant.ID = "10000"
 	c.Postgres.DSN = "postgres://coordos:coordos@localhost:5432/coordos?sslmode=disable"
 	c.MySQL.DSN = "root:123.com@tcp(127.0.0.1:3306)/icrm?charset=utf8mb4&parseTime=true&loc=Local"
-	c.Storage.Backend = "sqlite"
-	c.Storage.SQLitePath = "./coordos.db"
+	c.Storage.Backend = "rocksdb"
+	c.Storage.RocksPath = "./coordos_vault_rocks_native.json"
 	return c
 }
 
@@ -79,8 +79,8 @@ func mergeFromFile(dst *Config, src Config) {
 	if src.Storage.Backend != "" {
 		dst.Storage.Backend = src.Storage.Backend
 	}
-	if src.Storage.SQLitePath != "" {
-		dst.Storage.SQLitePath = src.Storage.SQLitePath
+	if src.Storage.RocksPath != "" {
+		dst.Storage.RocksPath = src.Storage.RocksPath
 	}
 }
 
@@ -91,7 +91,7 @@ func applyEnv(c *Config) {
 	c.Postgres.DSN = envOrDefault("VAULT_SERVICE_PG_DSN", c.Postgres.DSN)
 	c.MySQL.DSN = envOrDefault("VAULT_SERVICE_MYSQL_DSN", c.MySQL.DSN)
 	c.Storage.Backend = envOrDefault("VAULT_SERVICE_STORAGE_BACKEND", c.Storage.Backend)
-	c.Storage.SQLitePath = envOrDefault("VAULT_SERVICE_SQLITE_PATH", c.Storage.SQLitePath)
+	c.Storage.RocksPath = envOrDefault("VAULT_SERVICE_ROCKS_PATH", c.Storage.RocksPath)
 }
 
 func validate(c Config) error {
@@ -105,12 +105,12 @@ func validate(c Config) error {
 		return fmt.Errorf("invalid config: tenant.id is empty")
 	}
 	switch strings.ToLower(strings.TrimSpace(c.Storage.Backend)) {
-	case "sqlite", "rocksdb":
+	case "rocksdb":
 	default:
-		return fmt.Errorf("invalid config: storage.backend must be sqlite or rocksdb")
+		return fmt.Errorf("invalid config: storage.backend must be rocksdb")
 	}
-	if strings.EqualFold(c.Storage.Backend, "sqlite") && strings.TrimSpace(c.Storage.SQLitePath) == "" {
-		return fmt.Errorf("invalid config: storage.sqlite_path is empty while backend=sqlite")
+	if strings.TrimSpace(c.Storage.RocksPath) == "" {
+		return fmt.Errorf("invalid config: storage.rocks_path is empty while backend=rocksdb")
 	}
 	return nil
 }
@@ -164,3 +164,4 @@ func envOrDefault(key, fallback string) string {
 	}
 	return v
 }
+

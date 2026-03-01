@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -19,7 +20,7 @@ type Employee struct {
 	Position      string
 	StartDate     *time.Time
 	EndDate       *time.Time
-	ExecutorRef   *string   // v://zhongbei/executor/person/{id}
+	ExecutorRef   *string // v://zhongbei/executor/person/{id}
 	TenantID      int
 	Deleted       bool
 	CreatedAt     time.Time
@@ -28,15 +29,17 @@ type Employee struct {
 }
 
 type CreateEmployeeInput struct {
-	Name         string
-	Phone        string
-	Account      string
-	CompanyID    *int
-	DepartmentID *int
-	UserID       *int64
-	Position     string
-	StartDate    *time.Time
-	TenantID     int
+	Name           string
+	Phone          string
+	Account        string
+	CompanyID      *int
+	DepartmentID   *int
+	UserID         *int64
+	Position       string
+	StartDate      *time.Time
+	PersonIdentity string
+	ExecutorRef    string
+	TenantID       int
 }
 
 type EmployeeFilter struct {
@@ -78,6 +81,14 @@ func (s *Service) Create(ctx context.Context, in CreateEmployeeInput) (*Employee
 	if in.Name == "" {
 		return nil, fmt.Errorf("姓名不能为空")
 	}
+	ref, err := buildExecutorRef(in.PersonIdentity, in.ExecutorRef)
+	if err != nil {
+		return nil, err
+	}
+	if ref == "" {
+		// Backward-compatible fallback for existing callers.
+		ref = fmt.Sprintf("v://zhongbei/executor/person/%d", time.Now().UnixNano())
+	}
 	e := &Employee{
 		Name:          in.Name,
 		Phone:         in.Phone,
@@ -92,8 +103,6 @@ func (s *Service) Create(ctx context.Context, in CreateEmployeeInput) (*Employee
 		UpdatedAt:     time.Now(),
 		MigrateStatus: "NEW",
 	}
-	// 生成 executor_ref
-	ref := fmt.Sprintf("v://zhongbei/executor/person/%d", time.Now().UnixNano())
 	e.ExecutorRef = &ref
 
 	if err := s.store.Create(ctx, e); err != nil {
@@ -122,6 +131,66 @@ func (s *Service) Resign(ctx context.Context, id int64, endDate time.Time) error
 	e.EndDate = &endDate
 	e.UpdatedAt = time.Now()
 	return s.store.Update(ctx, e)
+}
+
+func (s *Service) BindPersonIdentity(ctx context.Context, id int64, personIdentity string) (string, error) {
+	ref, err := buildExecutorRef(personIdentity, "")
+	if err != nil {
+		return "", err
+	}
+	if ref == "" {
+		return "", fmt.Errorf("person_identity is required")
+	}
+	if err := s.store.SetExecutorRef(ctx, id, ref); err != nil {
+		return "", fmt.Errorf("bind person identity failed: %w", err)
+	}
+	return ref, nil
+}
+
+func (s *Service) BindExecutorRef(ctx context.Context, id int64, executorRef string) (string, error) {
+	ref, err := buildExecutorRef("", executorRef)
+	if err != nil {
+		return "", err
+	}
+	if ref == "" {
+		return "", fmt.Errorf("executor_ref is required")
+	}
+	if err := s.store.SetExecutorRef(ctx, id, ref); err != nil {
+		return "", fmt.Errorf("bind executor ref failed: %w", err)
+	}
+	return ref, nil
+}
+
+func buildExecutorRef(personIdentity, explicitExecutorRef string) (string, error) {
+	if explicit := strings.TrimSpace(explicitExecutorRef); explicit != "" {
+		if !isCanonicalPersonExecutorRef(explicit) {
+			return "", fmt.Errorf("executor_ref must match v://person/{identity}/executor")
+		}
+		return explicit, nil
+	}
+	identity := normalizePersonIdentity(personIdentity)
+	if identity == "" {
+		return "", nil
+	}
+	return fmt.Sprintf("v://person/%s/executor", identity), nil
+}
+
+func isCanonicalPersonExecutorRef(ref string) bool {
+	if !strings.HasPrefix(ref, "v://person/") || !strings.HasSuffix(ref, "/executor") {
+		return false
+	}
+	identity := strings.TrimSuffix(strings.TrimPrefix(ref, "v://person/"), "/executor")
+	return strings.TrimSpace(identity) != ""
+}
+
+func normalizePersonIdentity(raw string) string {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return ""
+	}
+	v = strings.ToUpper(v)
+	v = strings.ReplaceAll(v, " ", "")
+	return v
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -194,14 +263,19 @@ func (s *PGStore) List(ctx context.Context, f EmployeeFilter) ([]*Employee, int,
 	args := []any{f.TenantID}
 	i := 2
 	if f.CompanyID != nil {
-		where += fmt.Sprintf(" AND company_id=$%d", i); args = append(args, *f.CompanyID); i++
+		where += fmt.Sprintf(" AND company_id=$%d", i)
+		args = append(args, *f.CompanyID)
+		i++
 	}
 	if f.DepartmentID != nil {
-		where += fmt.Sprintf(" AND department_id=$%d", i); args = append(args, *f.DepartmentID); i++
+		where += fmt.Sprintf(" AND department_id=$%d", i)
+		args = append(args, *f.DepartmentID)
+		i++
 	}
 	if f.Keyword != "" {
 		where += fmt.Sprintf(" AND (name ILIKE $%d OR phone ILIKE $%d)", i, i)
-		args = append(args, "%"+f.Keyword+"%"); i++
+		args = append(args, "%"+f.Keyword+"%")
+		i++
 	}
 
 	var total int

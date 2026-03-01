@@ -15,6 +15,12 @@ type fileConfig struct {
 	Server struct {
 		Addr string `yaml:"addr"`
 	} `yaml:"server"`
+	SPU struct {
+		CatalogPath string `yaml:"catalog_path"`
+	} `yaml:"spu"`
+	Resolve struct {
+		HeadOfficeRef string `yaml:"head_office_ref"`
+	} `yaml:"resolve"`
 	Tenant struct {
 		ID int `yaml:"id"`
 	} `yaml:"tenant"`
@@ -25,9 +31,11 @@ type fileConfig struct {
 
 func loadConfig() config {
 	cfg := config{
-		Addr:     ":8090",
-		PGDSN:    "postgres://coordos:coordos@localhost:5432/coordos?sslmode=disable",
-		TenantID: 10000,
+		Addr:              ":8090",
+		PGDSN:             "postgres://coordos:coordos@localhost:5432/coordos?sslmode=disable",
+		TenantID:          10000,
+		HeadOfficeRefBase: "v://zhongbei/executor/headquarters",
+		SPUCatalogPath:    "specs/spu/bridge/catalog.v1.json",
 	}
 
 	fc, path, err := loadConfigFile()
@@ -44,12 +52,52 @@ func loadConfig() config {
 		if fc.Tenant.ID > 0 {
 			cfg.TenantID = fc.Tenant.ID
 		}
+		if v := strings.TrimSpace(fc.Resolve.HeadOfficeRef); v != "" {
+			cfg.HeadOfficeRefBase = v
+		}
+		if v := strings.TrimSpace(fc.SPU.CatalogPath); v != "" {
+			cfg.SPUCatalogPath = v
+		}
 		log.Printf("config file loaded: %s", path)
 	}
 
-	cfg.Addr = envOrDefault("DESIGN_INSTITUTE_HTTP_ADDR", cfg.Addr)
-	cfg.PGDSN = envOrDefault("DESIGN_INSTITUTE_PG_DSN", cfg.PGDSN)
+	// Preferred env vars.
+	if v := strings.TrimSpace(os.Getenv("DESIGN_INSTITUTE_HTTP_ADDR")); v != "" {
+		cfg.Addr = normalizeHTTPAddr(v)
+	}
+	if v := strings.TrimSpace(os.Getenv("DESIGN_INSTITUTE_PG_DSN")); v != "" {
+		cfg.PGDSN = v
+	}
+	if v := strings.TrimSpace(os.Getenv("DESIGN_INSTITUTE_HEAD_OFFICE_REF")); v != "" {
+		cfg.HeadOfficeRefBase = v
+	}
+	if v := strings.TrimSpace(os.Getenv("DESIGN_INSTITUTE_SPU_CATALOG_PATH")); v != "" {
+		cfg.SPUCatalogPath = v
+	}
 	cfg.TenantID = envIntOrDefault("DESIGN_INSTITUTE_TENANT_ID", cfg.TenantID)
+
+	// Compatibility with older docs/scripts.
+	// 1) DATABASE_URL for Postgres DSN.
+	if v := strings.TrimSpace(os.Getenv("DATABASE_URL")); v != "" {
+		if strings.TrimSpace(os.Getenv("DESIGN_INSTITUTE_PG_DSN")) == "" {
+			cfg.PGDSN = v
+		}
+		// Keep test-1 behavior: when only DATABASE_URL is provided, bind on :8081.
+		if strings.TrimSpace(os.Getenv("DESIGN_INSTITUTE_HTTP_ADDR")) == "" &&
+			strings.TrimSpace(os.Getenv("PORT")) == "" &&
+			cfg.Addr == ":8090" {
+			cfg.Addr = ":8081"
+		}
+	}
+	// 2) PORT for HTTP bind.
+	if v := strings.TrimSpace(os.Getenv("PORT")); v != "" &&
+		strings.TrimSpace(os.Getenv("DESIGN_INSTITUTE_HTTP_ADDR")) == "" {
+		cfg.Addr = normalizeHTTPAddr(v)
+	}
+	// 3) TENANT_ID fallback.
+	if strings.TrimSpace(os.Getenv("DESIGN_INSTITUTE_TENANT_ID")) == "" {
+		cfg.TenantID = envIntOrDefault("TENANT_ID", cfg.TenantID)
+	}
 
 	validateConfig(cfg)
 	return cfg
@@ -64,6 +112,12 @@ func validateConfig(cfg config) {
 	}
 	if cfg.TenantID <= 0 {
 		log.Fatalf("invalid config: tenant.id must be positive")
+	}
+	if strings.TrimSpace(cfg.HeadOfficeRefBase) == "" {
+		log.Fatalf("invalid config: resolve.head_office_ref is empty")
+	}
+	if strings.TrimSpace(cfg.SPUCatalogPath) == "" {
+		log.Fatalf("invalid config: spu.catalog_path is empty")
 	}
 }
 
@@ -130,4 +184,18 @@ func envIntOrDefault(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+func normalizeHTTPAddr(raw string) string {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return v
+	}
+	if strings.HasPrefix(v, ":") {
+		return v
+	}
+	if _, err := strconv.Atoi(v); err == nil {
+		return ":" + v
+	}
+	return v
 }

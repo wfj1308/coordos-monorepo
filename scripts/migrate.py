@@ -711,6 +711,178 @@ def verify():
 # ════════════════════════════════════════════════════════════════
 #  主入口
 # ════════════════════════════════════════════════════════════════
+def migrate_supplement():
+    log.info("=== PHASE 7: supplemental backfill (credentials/profile) ===")
+    pg_conn = get_pg()
+    pg_cur = pg_conn.cursor()
+    try:
+        inserted_credentials = _backfill_credentials_from_qualifications(pg_cur)
+        inserted_profiles = _backfill_profiles_from_contracts(pg_cur)
+        inserted_personnel = _backfill_profile_personnel(pg_cur)
+        pg_conn.commit()
+        log.info(
+            "  supplement completed: credentials=%s, profiles=%s, profile_personnel=%s",
+            inserted_credentials,
+            inserted_profiles,
+            inserted_personnel,
+        )
+    except Exception as e:
+        pg_conn.rollback()
+        log.error("  supplement failed: %s", e)
+        raise
+    finally:
+        pg_conn.close()
+
+
+def _backfill_credentials_from_qualifications(pg_cur):
+    pg_cur.execute(
+        """
+        WITH qual_norm AS (
+            SELECT
+                q.tenant_id,
+                q.holder_type::text AS holder_type,
+                q.qual_type::text AS cert_type,
+                q.cert_no::text AS cert_number,
+                q.issued_at::date AS issued_at,
+                q.valid_until::date AS expires_at,
+                COALESCE(q.scope, '')::text AS scope,
+                CASE q.status
+                    WHEN 'VALID' THEN 'ACTIVE'
+                    WHEN 'EXPIRE_SOON' THEN 'ACTIVE'
+                    WHEN 'EXPIRED' THEN 'EXPIRED'
+                    WHEN 'REVOKED' THEN 'REVOKED'
+                    ELSE 'SUSPENDED'
+                END::text AS mapped_status,
+                COALESCE(
+                    NULLIF(q.executor_ref, ''),
+                    CASE
+                        WHEN q.holder_type = 'PERSON'
+                            THEN COALESCE(e.executor_ref, 'v://' || q.tenant_id || '/person/' || q.holder_id)
+                        ELSE COALESCE(c.executor_ref, 'v://' || q.tenant_id || '/company/' || q.holder_id)
+                    END
+                )::text AS holder_ref,
+                COALESCE(q.created_at, NOW()) AS created_at,
+                COALESCE(q.updated_at, NOW()) AS updated_at
+            FROM qualifications q
+            LEFT JOIN employees e
+                ON q.holder_type = 'PERSON' AND e.id = q.holder_id
+            LEFT JOIN companies c
+                ON q.holder_type = 'COMPANY' AND c.id = q.holder_id
+            WHERE q.deleted = FALSE
+        )
+        INSERT INTO credentials (
+            holder_ref, holder_type, cert_type, cert_number,
+            issued_at, expires_at, scope, status,
+            tenant_id, created_at, updated_at
+        )
+        SELECT
+            qn.holder_ref,
+            qn.holder_type,
+            qn.cert_type,
+            qn.cert_number,
+            qn.issued_at,
+            qn.expires_at,
+            qn.scope,
+            qn.mapped_status,
+            qn.tenant_id,
+            qn.created_at,
+            qn.updated_at
+        FROM qual_norm qn
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM credentials c
+            WHERE c.tenant_id = qn.tenant_id
+              AND c.holder_ref = qn.holder_ref
+              AND c.cert_type = qn.cert_type
+              AND COALESCE(c.cert_number, '') = COALESCE(qn.cert_number, '')
+        )
+        """
+    )
+    return pg_cur.rowcount
+
+
+def _backfill_profiles_from_contracts(pg_cur):
+    pg_cur.execute(
+        """
+        INSERT INTO achievement_profiles (
+            project_name, project_type, building_unit, location,
+            start_date, end_date, our_scope,
+            contract_amount, our_amount, scale_metrics,
+            contract_id, project_ref, utxo_ref,
+            status, company_id, source, note,
+            tenant_id, created_at, updated_at
+        )
+        SELECT
+            COALESCE(NULLIF(c.contract_name, ''), NULLIF(c.num, ''), 'legacy-contract-' || c.id)::text AS project_name,
+            'OTHER'::text AS project_type,
+            COALESCE(co.name, '')::text AS building_unit,
+            COALESCE(co.address, '')::text AS location,
+            c.contract_date AS start_date,
+            c.updated_at AS end_date,
+            COALESCE(NULLIF(c.contract_type, ''), 'LEGACY_IMPORT')::text AS our_scope,
+            COALESCE(c.contract_balance, 0)::numeric AS contract_amount,
+            COALESCE(c.contract_balance, 0)::numeric AS our_amount,
+            '{}'::jsonb AS scale_metrics,
+            c.id AS contract_id,
+            c.project_ref AS project_ref,
+            NULL::text AS utxo_ref,
+            CASE
+                WHEN COALESCE(c.contract_balance, 0) > 0 AND c.contract_date IS NOT NULL
+                    THEN 'COMPLETE'
+                ELSE 'DRAFT'
+            END::text AS status,
+            c.company_id AS company_id,
+            'MANUAL'::text AS source,
+            'legacy contract backfill'::text AS note,
+            c.tenant_id AS tenant_id,
+            COALESCE(c.created_at, NOW()) AS created_at,
+            COALESCE(c.updated_at, NOW()) AS updated_at
+        FROM contracts c
+        LEFT JOIN companies co ON co.id = c.company_id
+        WHERE c.deleted = FALSE
+          AND c.company_id IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1
+              FROM achievement_profiles p
+              WHERE p.contract_id = c.id
+                AND p.deleted = FALSE
+          )
+        """
+    )
+    return pg_cur.rowcount
+
+
+def _backfill_profile_personnel(pg_cur):
+    pg_cur.execute(
+        """
+        INSERT INTO achievement_profile_personnel (
+            profile_id, employee_id, employee_name, executor_ref,
+            role, specialty, qual_type, cert_no
+        )
+        SELECT
+            p.id AS profile_id,
+            e.id AS employee_id,
+            COALESCE(e.name, 'UNKNOWN')::text AS employee_name,
+            e.executor_ref,
+            '项目负责人'::text AS role,
+            e.position::text AS specialty,
+            NULL::text AS qual_type,
+            NULL::text AS cert_no
+        FROM achievement_profiles p
+        JOIN contracts c ON c.id = p.contract_id
+        JOIN employees e ON e.id = c.employee_id
+        WHERE p.deleted = FALSE
+          AND NOT EXISTS (
+              SELECT 1
+              FROM achievement_profile_personnel pp
+              WHERE pp.profile_id = p.id
+                AND pp.employee_id = e.id
+          )
+        """
+    )
+    return pg_cur.rowcount
+
+
 PHASES = {
     "company":  migrate_companies,
     "employee": migrate_employees,
@@ -718,6 +890,7 @@ PHASES = {
     "finance":  migrate_finance,
     "drawing":  migrate_drawings,
     "verify":   verify,
+    "supplement": migrate_supplement,
 }
 
 def main():

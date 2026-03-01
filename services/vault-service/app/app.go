@@ -9,6 +9,7 @@ package app
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	pc "coordos/project-core"
@@ -53,18 +54,23 @@ func (a *ProjectApp) CreateRootProject(actor Actor, req CreateProjectReq) (*pc.P
 	}
 
 	now := time.Now().UTC()
+	platformRef := req.PlatformRef
+	if strings.TrimSpace(string(platformRef)) == "" {
+		platformRef = actor.Ref
+	}
 	node := &pc.ProjectNode{
-		Ref:        pc.VRef(fmt.Sprintf("v://%s/project/%s", actor.TenantID, req.ID)),
-		ParentRef:  "",
-		TenantID:   actor.TenantID,
-		OwnerRef:   req.OwnerRef,
-		Status:     pc.StatusInitiated,
-		Depth:      0,
-		Path:       req.ID,
-		Children:   []pc.VRef{},
-		Milestones: []pc.MilestoneEvent{},
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		Ref:         pc.VRef(fmt.Sprintf("v://%s/project/%s", actor.TenantID, req.ID)),
+		ParentRef:   "",
+		TenantID:    actor.TenantID,
+		OwnerRef:    req.OwnerRef,
+		PlatformRef: platformRef,
+		Status:      pc.StatusInitiated,
+		Depth:       0,
+		Path:        req.ID,
+		Children:    []pc.VRef{},
+		Milestones:  []pc.MilestoneEvent{},
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 
 	if err := a.d.Projects.CreateNode(actor.TenantID, node); err != nil {
@@ -268,13 +274,27 @@ func (a *SettleApp) TriggerSettle(actor Actor, projectRef pc.VRef) error {
 	}
 
 	ctx := a.buildContext(actor.TenantID)
+	node, err := a.d.Projects.GetNode(actor.TenantID, projectRef)
+	if err != nil {
+		return fmt.Errorf("project node not found: %w", err)
+	}
+	if strings.TrimSpace(string(node.PlatformRef)) == "" {
+		if strings.TrimSpace(string(actor.Ref)) == "" {
+			return fmt.Errorf("project platform_ref is empty and actor ref is empty")
+		}
+		node.PlatformRef = actor.Ref
+		node.UpdatedAt = time.Now().UTC()
+		if err := a.d.Projects.UpdateNode(actor.TenantID, node); err != nil {
+			return fmt.Errorf("backfill platform_ref failed: %w", err)
+		}
+	}
+
 	engine := pc.NewRuleEngine(a.d.Rules, ctx.AuditStore)
 	if err := engine.Execute(evt, ctx); err != nil {
 		return err
 	}
 
 	// Transition to SETTLED.
-	node, _ := a.d.Projects.GetNode(actor.TenantID, projectRef)
 	sm := pc.NewStateMachine(ctx.ProjectTree, ctx.AuditStore)
 	return sm.Transition(node, pc.StatusSettled, actor.Ref, ctx)
 }
@@ -325,9 +345,10 @@ func requireRole(actor Actor, roles ...string) error {
 // Request types
 
 type CreateProjectReq struct {
-	ID       string
-	Name     string
-	OwnerRef pc.VRef
+	ID          string
+	Name        string
+	OwnerRef    pc.VRef
+	PlatformRef pc.VRef
 }
 
 type CreateChildProjectReq struct {

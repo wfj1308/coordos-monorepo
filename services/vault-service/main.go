@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"strings"
 
@@ -9,7 +10,6 @@ import (
 	svcconfig "coordos/vault-service/config"
 	"coordos/vault-service/infra/store"
 	"coordos/vault-service/infra/store/rocksdb"
-	"coordos/vault-service/infra/store/sqlite"
 )
 
 type backend interface {
@@ -63,12 +63,10 @@ func main() {
 }
 
 func openBackend(cfg svcconfig.Config) (backend, error) {
-	switch strings.ToLower(strings.TrimSpace(cfg.Storage.Backend)) {
-	case "rocksdb":
-		return rocksdb.Open(cfg.Storage.SQLitePath)
-	case "sqlite":
-		fallthrough
-	default:
-		return sqlite.Open(cfg.Storage.SQLitePath)
+	b := strings.ToLower(strings.TrimSpace(cfg.Storage.Backend))
+	if b != "rocksdb" {
+		return nil, fmt.Errorf("unsupported storage backend %q: use rocksdb", cfg.Storage.Backend)
 	}
+	return rocksdb.Open(cfg.Storage.RocksPath)
 }
+

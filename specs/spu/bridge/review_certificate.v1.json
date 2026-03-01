@@ -77,6 +77,10 @@
     "capability_level":"高级工程师及以上",
     "min_experience_years":10,
     "required_skills":["structural_review","bridge_design","code_compliance"],
+    "required_qualifications":[
+      "v://zhongbei/qualification/REG_STRUCTURE_LEVEL_1",
+      "v://zhongbei/qualification/HEAD_OFFICE_REVIEW_SIGNATORY"
+    ],
     "qualification":"注册结构工程师（必须）",
     "energy":{ "kind":"LABOR","base_days":5,"range_days":[3,15] },
     "head_office_only": true,

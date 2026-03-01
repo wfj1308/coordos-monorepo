@@ -1,23 +1,4 @@
 services:
-  mysql:
-    image: mysql:5.7
-    container_name: coordos-mysql
-    restart: unless-stopped
-    command:
-      - --default-authentication-plugin=mysql_native_password
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_unicode_ci
-    environment:
-      MYSQL_ROOT_PASSWORD: "123.com"
-      MYSQL_DATABASE: "icrm"
-      MYSQL_USER: "tongna"
-      MYSQL_PASSWORD: "tongna"
-      TZ: "Asia/Shanghai"
-    ports:
-      - "3306:3306"
-    volumes:
-      - mysql_data:/var/lib/mysql
-
   postgres:
     image: postgres:16
     container_name: coordos-postgres
@@ -33,5 +14,4 @@ services:
       - postgres_data:/var/lib/postgresql/data
 
 volumes:
-  mysql_data:
   postgres_data:

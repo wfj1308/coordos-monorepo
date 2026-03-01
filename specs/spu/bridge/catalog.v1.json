@@ -17,6 +17,10 @@
       "stage": "设计",
       "auto_executable": "条件性（标准地质>90%置信度）",
       "blocking_for_next": true,
+      "required_qualifications": [
+        "v://zhongbei/qualification/REG_STRUCTURE_LEVEL_1",
+        "v://zhongbei/qualification/BRIDGE_ENGINEER"
+      ],
       "note": "链路起点，所有后续SPU的基础"
     },
     {
@@ -96,6 +100,10 @@
       "stage": "竣工",
       "auto_executable": "否（审图机构出具）",
       "blocking_for_next": true,
+      "required_qualifications": [
+        "v://zhongbei/qualification/REG_STRUCTURE_LEVEL_1",
+        "v://zhongbei/qualification/HEAD_OFFICE_REVIEW_SIGNATORY"
+      ],
       "note": "RULE-002触发点：总院实质参与的核心证明"
     },
     {

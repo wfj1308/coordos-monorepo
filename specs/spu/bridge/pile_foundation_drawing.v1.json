@@ -315,6 +315,10 @@
       "bridge_structure",
       "cad_drawing"
     ],
+    "required_qualifications": [
+      "v://zhongbei/qualification/REG_STRUCTURE_LEVEL_1",
+      "v://zhongbei/qualification/BRIDGE_ENGINEER"
+    ],
     "qualification": "结构工程师（初级及以上）",
     "energy": {
       "kind": "LABOR",

@@ -25,6 +25,14 @@ tags:
   - name: Achievement
   - name: Approval
   - name: Report
+  - name: Right
+  - name: Resolve
+  - name: Namespace
+  - name: Publishing
+  - name: Public
+  - name: Bidding
+  - name: Compliance
+  - name: ResourceBinding
 paths:
   /health:
     get:
@@ -121,6 +129,32 @@ paths:
               required: [status]
               properties:
                 status: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/projects/{ref}/resources:
+    get:
+      tags: [Project]
+      summary: Get project resource evidence pack
+      operationId: projectResources
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/projects/{ref}/evidence-pack:
+    get:
+      tags: [Project]
+      summary: Get project evidence pack (alias)
+      operationId: projectEvidencePack
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          schema: {type: string}
       responses:
         "200": {$ref: "#/components/responses/GenericSuccess"}
         default: {$ref: "#/components/responses/ErrorResponse"}
@@ -305,6 +339,32 @@ paths:
       summary: Mark settlement as paid
       operationId: paySettlement
       parameters: [{$ref: "#/components/parameters/PathID"}]
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/settlements/link-utxo:
+    post:
+      tags: [Settlement]
+      summary: Bind settlement UTXO reference
+      operationId: linkSettlementUTXO
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                balance_id:
+                  type: integer
+                  format: int64
+                  description: Target settlement row ID. Optional when project_ref is provided.
+                project_ref:
+                  type: string
+                  description: Target project ref. Optional when balance_id is provided.
+                utxo_ref:
+                  type: string
+                  description: UTXO ref to bind.
+              required: [utxo_ref]
       responses:
         "200": {$ref: "#/components/responses/GenericSuccess"}
         default: {$ref: "#/components/responses/ErrorResponse"}
@@ -551,6 +611,28 @@ paths:
       responses:
         "200": {$ref: "#/components/responses/GenericSuccess"}
         default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/employees/{id}/bind-person:
+    put:
+      tags: [Employee]
+      summary: Bind employee executor_ref to canonical person identity
+      operationId: bindEmployeePerson
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                person_identity:
+                  type: string
+                  description: Canonical identity input, converted to v://person/{identity}/executor.
+                executor_ref:
+                  type: string
+                  description: Optional direct canonical executor ref.
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
 
   # -------------------------- Achievement --------------------------
   /api/v1/achievements:
@@ -570,6 +652,174 @@ paths:
       summary: Get achievement by ID
       operationId: getAchievement
       parameters: [{$ref: "#/components/parameters/PathID"}]
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/achievements/manual:
+    post:
+      tags: [Achievement]
+      summary: Create manual achievement UTXO
+      operationId: createManualAchievement
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GenericObject"}
+      responses:
+        "201": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  # -------------------------- Right --------------------------
+  /api/v1/rights:
+    post:
+      tags: [Right]
+      summary: Create right resource
+      operationId: createRight
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GenericObject"}
+      responses:
+        "201": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+    get:
+      tags: [Right]
+      summary: List right resources
+      operationId: listRights
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+        - name: holder_ref
+          in: query
+          schema: {type: string}
+        - name: right_type
+          in: query
+          schema: {type: string}
+        - name: status
+          in: query
+          schema: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  # -------------------------- Resolve --------------------------
+  /api/v1/resolve/verify:
+    post:
+      tags: [Resolve]
+      summary: Verify whether executor can perform action/SPU
+      operationId: resolveVerify
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                executor_ref: {type: string}
+                project_ref: {type: string}
+                spu_ref: {type: string}
+                action: {type: string}
+                valid_on:
+                  type: string
+                  description: Date string in YYYY-MM-DD.
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        "403": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/verify/executor:
+    post:
+      tags: [Resolve]
+      summary: Verify executor (alias of /api/v1/resolve/verify)
+      operationId: verifyExecutorAlias
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                executor_ref: {type: string}
+                project_ref: {type: string}
+                spu_ref: {type: string}
+                action: {type: string}
+                valid_on:
+                  type: string
+                  description: Date string in YYYY-MM-DD.
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        "403": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/resolve/candidates:
+    post:
+      tags: [Resolve]
+      summary: Resolve candidate executors for task/SPU
+      operationId: resolveCandidates
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                project_ref: {type: string}
+                spu_ref: {type: string}
+                action: {type: string}
+                head_office_only: {type: boolean}
+                valid_on:
+                  type: string
+                  description: Date string in YYYY-MM-DD.
+                limit: {type: integer}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/resolve/executor:
+    post:
+      tags: [Resolve]
+      summary: Resolve candidate executors (alias of /api/v1/resolve/candidates)
+      operationId: resolveExecutorAlias
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tenant: {type: string}
+                project_ref: {type: string}
+                spu_ref: {type: string}
+                role: {type: string}
+                action: {type: string}
+                head_office_only: {type: boolean}
+                valid_on:
+                  type: string
+                  description: Date string in YYYY-MM-DD.
+                limit: {type: integer}
+                constraints:
+                  type: object
+                  properties:
+                    needs_company_qual_types:
+                      type: array
+                      items: {type: string}
+                    needs_person_qual_types:
+                      type: array
+                      items: {type: string}
+                    valid_on:
+                      type: string
+                      description: Date string in YYYY-MM-DD.
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/resolve/occupied/{ref}:
+    get:
+      tags: [Resolve]
+      summary: Get current occupied-capacity status for one executor
+      operationId: resolveOccupied
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          schema: {type: string}
       responses:
         "200": {$ref: "#/components/responses/GenericSuccess"}
         default: {$ref: "#/components/responses/ErrorResponse"}
@@ -698,6 +948,729 @@ paths:
       parameters:
         - $ref: "#/components/parameters/From"
         - $ref: "#/components/parameters/To"
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/reports/qualification:
+    get:
+      tags: [Report]
+      summary: Get qualification application report data
+      operationId: reportQualification
+      parameters:
+        - name: year
+          in: query
+          required: true
+          schema: {type: integer}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/reports/risk-events:
+    get:
+      tags: [Report]
+      summary: Get aggregated risk events
+      operationId: reportRiskEvents
+      parameters:
+        - name: days
+          in: query
+          schema: {type: integer, default: 30}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/professional/{ref}/profile:
+    get:
+      tags: [Achievement]
+      summary: Get professional UTXO profile
+      operationId: professionalProfile
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          schema: {type: string}
+        - name: tenant_ids
+          in: query
+          schema: {type: string}
+          description: Optional comma-separated tenant IDs for federated query.
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/professional/{ref}/capacity:
+    get:
+      tags: [Achievement]
+      summary: Get professional occupied-capacity view
+      operationId: professionalCapacity
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/profiles:
+    post:
+      tags: [Achievement]
+      summary: Create achievement profile
+      operationId: createProfile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GenericObject"}
+      responses:
+        "201": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+    get:
+      tags: [Achievement]
+      summary: List achievement profiles
+      operationId: listProfiles
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+        - name: company_id
+          in: query
+          schema: {type: integer}
+        - name: employee_id
+          in: query
+          schema: {type: integer, format: int64}
+        - name: project_type
+          in: query
+          schema: {type: string}
+        - name: status
+          in: query
+          schema: {type: string}
+        - name: keyword
+          in: query
+          schema: {type: string}
+        - name: year_from
+          in: query
+          schema: {type: integer}
+        - name: year_to
+          in: query
+          schema: {type: integer}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/profiles/{id}:
+    get:
+      tags: [Achievement]
+      summary: Get achievement profile by ID
+      operationId: getProfile
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/profiles/{id}/personnel:
+    post:
+      tags: [Achievement]
+      summary: Add personnel item to profile
+      operationId: addProfilePersonnel
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GenericObject"}
+      responses:
+        "201": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/profiles/{id}/attachments:
+    post:
+      tags: [Achievement]
+      summary: Add attachment item to profile
+      operationId: addProfileAttachment
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GenericObject"}
+      responses:
+        "201": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/profiles/personal/{employee_id}:
+    get:
+      tags: [Achievement]
+      summary: Get personal profile by employee ID
+      operationId: getPersonalProfile
+      parameters:
+        - name: employee_id
+          in: path
+          required: true
+          schema: {type: integer, format: int64}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/profiles/bidding-package:
+    post:
+      tags: [Achievement]
+      summary: Build bidding package from profile data
+      operationId: buildProfileBiddingPackage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GenericObject"}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/qualifications:
+    post:
+      tags: [Resolve]
+      summary: Create qualification credential
+      operationId: createQualification
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GenericObject"}
+      responses:
+        "201": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+    get:
+      tags: [Resolve]
+      summary: List qualification credentials
+      operationId: listQualifications
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+        - name: holder_type
+          in: query
+          schema: {type: string}
+        - name: holder_id
+          in: query
+          schema: {type: integer, format: int64}
+        - name: qual_type
+          in: query
+          schema: {type: string}
+        - name: status
+          in: query
+          schema: {type: string}
+        - name: company_id
+          in: query
+          schema: {type: integer}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/qualifications/{id}:
+    get:
+      tags: [Resolve]
+      summary: Get qualification by ID
+      operationId: getQualification
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+    put:
+      tags: [Resolve]
+      summary: Update qualification
+      operationId: updateQualification
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GenericObject"}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/qualifications/{id}/revoke:
+    put:
+      tags: [Resolve]
+      summary: Revoke qualification
+      operationId: revokeQualification
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GenericObject"}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/qualifications/warnings:
+    get:
+      tags: [Resolve]
+      summary: List qualification expiry warnings
+      operationId: listQualificationWarnings
+      parameters:
+        - name: days
+          in: query
+          schema: {type: integer, default: 90}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/qualifications/summary:
+    get:
+      tags: [Resolve]
+      summary: Get qualification summary by company
+      operationId: qualificationSummary
+      parameters:
+        - name: company_id
+          in: query
+          required: true
+          schema: {type: integer}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/qualifications/check-rule002:
+    get:
+      tags: [Resolve]
+      summary: Check RULE-002 validity by executor_ref
+      operationId: checkRule002
+      parameters:
+        - name: executor_ref
+          in: query
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/qualifications/assignments:
+    post:
+      tags: [Resolve]
+      summary: Bind qualification usage to one project (resource lock)
+      operationId: createQualificationAssignment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [qualification_id, executor_ref, project_ref]
+              properties:
+                qualification_id: {type: integer, format: int64}
+                executor_ref: {type: string}
+                project_ref: {type: string}
+      responses:
+        "201": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/projects/{ref}/qualification-assignments:
+    get:
+      tags: [Resolve]
+      summary: List qualification assignments for one project
+      operationId: listProjectQualificationAssignments
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/namespaces:
+    post:
+      tags: [Namespace]
+      summary: Create or update namespace node
+      operationId: createNamespace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GenericObject"}
+      responses:
+        "201": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/namespaces/{ref}:
+    get:
+      tags: [Namespace]
+      summary: Get namespace by ref
+      operationId: getNamespace
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/namespaces/{ref}/children:
+    get:
+      tags: [Namespace]
+      summary: List child namespaces
+      operationId: listNamespaceChildren
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/namespaces/{ref}/network:
+    get:
+      tags: [Namespace]
+      summary: Get namespace network (recursive tree + delegations)
+      operationId: getNamespaceNetwork
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/namespaces/get:
+    get:
+      tags: [Namespace]
+      summary: Get namespace by ref (query alias)
+      operationId: getNamespaceByQuery
+      parameters:
+        - name: ref
+          in: query
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/namespaces/children:
+    get:
+      tags: [Namespace]
+      summary: List namespace children (query alias)
+      operationId: listNamespaceChildrenByQuery
+      parameters:
+        - name: ref
+          in: query
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/namespaces/network:
+    get:
+      tags: [Namespace]
+      summary: Get namespace network (query alias)
+      operationId: getNamespaceNetworkByQuery
+      parameters:
+        - name: ref
+          in: query
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/namespaces/delegations:
+    post:
+      tags: [Namespace]
+      summary: Create namespace delegation
+      operationId: createNamespaceDelegation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GenericObject"}
+      responses:
+        "201": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/namespaces/route:
+    post:
+      tags: [Namespace]
+      summary: Verify namespace delegation route
+      operationId: verifyNamespaceRoute
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GenericObject"}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        "403": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/publishing/review-cert:
+    post:
+      tags: [Publishing]
+      summary: Issue review certificate for drawing
+      operationId: issueReviewCertificate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GenericObject"}
+      responses:
+        "201": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/publishing/publish:
+    post:
+      tags: [Publishing]
+      summary: Publish drawing version (requires review cert)
+      operationId: publishDrawing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GenericObject"}
+      responses:
+        "201": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/publishing/drawings/{no}/current:
+    get:
+      tags: [Publishing]
+      summary: Get current drawing version
+      operationId: getCurrentDrawing
+      parameters:
+        - name: no
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        "404": {$ref: "#/components/responses/ErrorResponse"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/publishing/drawings/{no}/chain:
+    get:
+      tags: [Publishing]
+      summary: Get drawing version history chain
+      operationId: getDrawingChain
+      parameters:
+        - name: no
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/publishing/projects/{ref}/drawings:
+    get:
+      tags: [Publishing]
+      summary: List drawings for one project
+      operationId: listProjectDrawings
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/publishing/projects/drawings:
+    get:
+      tags: [Publishing]
+      summary: List drawings by project_ref (query alias)
+      operationId: listProjectDrawingsByQuery
+      parameters:
+        - name: project_ref
+          in: query
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /public/v1/capabilities:
+    get:
+      tags: [Public]
+      summary: Public capability counters
+      operationId: publicCapabilities
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /public/v1/products:
+    get:
+      tags: [Public]
+      summary: Public product/SPU catalog list
+      operationId: publicProducts
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /public/v1/achievements:
+    get:
+      tags: [Public]
+      summary: Public achievement feed
+      operationId: publicAchievements
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+        - name: project_ref
+          in: query
+          schema: {type: string}
+        - name: spu_ref
+          in: query
+          schema: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/bidding/profiles:
+    post:
+      tags: [Bidding]
+      summary: Create bidding profile package
+      operationId: createBiddingProfile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GenericObject"}
+      responses:
+        "201": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+    get:
+      tags: [Bidding]
+      summary: List bidding profiles
+      operationId: listBiddingProfiles
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+        - name: project_ref
+          in: query
+          schema: {type: string}
+        - name: status
+          in: query
+          schema: {type: string}
+        - name: keyword
+          in: query
+          schema: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/bidding/profiles/{id}:
+    get:
+      tags: [Bidding]
+      summary: Get bidding profile by ID
+      operationId: getBiddingProfile
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        "404": {$ref: "#/components/responses/ErrorResponse"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/bidding/profiles/{id}/publish:
+    put:
+      tags: [Bidding]
+      summary: Publish bidding profile package
+      operationId: publishBiddingProfile
+      parameters: [{$ref: "#/components/parameters/PathID"}]
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/violations:
+    post:
+      tags: [Compliance]
+      summary: Report violation record
+      operationId: createViolationRecord
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GenericObject"}
+      responses:
+        "201": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+    get:
+      tags: [Compliance]
+      summary: List violation records
+      operationId: listViolationRecords
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+        - name: executor_ref
+          in: query
+          schema: {type: string}
+        - name: project_ref
+          in: query
+          schema: {type: string}
+        - name: rule_code
+          in: query
+          schema: {type: string}
+        - name: severity
+          in: query
+          schema: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/executors/{ref}/stats:
+    get:
+      tags: [Compliance]
+      summary: Get executor capability snapshot by ref
+      operationId: getExecutorStats
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/executors/stats:
+    get:
+      tags: [Compliance]
+      summary: Get executor capability snapshot by query ref
+      operationId: getExecutorStatsByQuery
+      parameters:
+        - name: ref
+          in: query
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/resource-bindings:
+    post:
+      tags: [ResourceBinding]
+      summary: Create resource binding record
+      operationId: createResourceBinding
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GenericObject"}
+      responses:
+        "201": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+    get:
+      tags: [ResourceBinding]
+      summary: List resource binding records
+      operationId: listResourceBindings
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+        - name: resource_ref
+          in: query
+          schema: {type: string}
+        - name: project_ref
+          in: query
+          schema: {type: string}
+        - name: executor_ref
+          in: query
+          schema: {type: string}
+        - name: status
+          in: query
+          schema: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/resource-bindings/{id}/release:
+    put:
+      tags: [ResourceBinding]
+      summary: Release one active resource binding
+      operationId: releaseResourceBinding
+      parameters: [{$ref: "#/components/parameters/PathID"}]
       responses:
         "200": {$ref: "#/components/responses/GenericSuccess"}
         default: {$ref: "#/components/responses/ErrorResponse"}

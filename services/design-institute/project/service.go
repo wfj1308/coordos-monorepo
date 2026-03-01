@@ -26,38 +26,38 @@ const (
 )
 
 type ProjectNode struct {
-	ID            int64
-	Ref           string    // v://zhongbei/project/{path}
-	TenantID      int
-	ParentID      *int64
-	ParentRef     *string
-	Depth         int       // 0=根节点
-	Path          string    // 物化路径 /1/3/7/
-	Name          string
-	OwnerRef      string    // 业主
-	ContractorRef string    // 承接方（总院）
-	ExecutorRef   string    // 执行方（分院/个人）
-	PlatformRef   string
-	ContractRef   *string
-	ProcurementRef *string
-	GenesisRef    *string
-	Status        Status
-	ProofHash     string
-	PrevHash      *string
+	ID               int64
+	Ref              string // v://zhongbei/project/{path}
+	TenantID         int
+	ParentID         *int64
+	ParentRef        *string
+	Depth            int    // 0=根节点
+	Path             string // 物化路径 /1/3/7/
+	Name             string
+	OwnerRef         string // 业主
+	ContractorRef    string // 承接方（总院）
+	ExecutorRef      string // 执行方（分院/个人）
+	PlatformRef      string
+	ContractRef      *string
+	ProcurementRef   *string
+	GenesisRef       *string
+	Status           Status
+	ProofHash        string
+	PrevHash         *string
 	LegacyContractID *int64 // 对应旧系统 contract.id
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 type CreateNodeInput struct {
-	ParentRef     *string
-	Name          string
-	OwnerRef      string
-	ContractorRef string
-	ExecutorRef   string
-	PlatformRef   string
+	ParentRef        *string
+	Name             string
+	OwnerRef         string
+	ContractorRef    string
+	ExecutorRef      string
+	PlatformRef      string
 	LegacyContractID *int64
-	TenantID      int
+	TenantID         int
 }
 
 type TreeNode struct {
@@ -104,19 +104,19 @@ func (s *Service) CreateRoot(ctx context.Context, in CreateNodeInput) (*ProjectN
 
 	ref := s.genRef("root", in.Name)
 	node := &ProjectNode{
-		Ref:           ref,
-		TenantID:      s.tenantID,
-		Depth:         0,
-		Path:          "/",
-		Name:          in.Name,
-		OwnerRef:      in.OwnerRef,
-		ContractorRef: in.ContractorRef,
-		ExecutorRef:   in.ExecutorRef,
-		PlatformRef:   in.PlatformRef,
-		Status:        StatusInitiated,
+		Ref:              ref,
+		TenantID:         s.tenantID,
+		Depth:            0,
+		Path:             "/",
+		Name:             in.Name,
+		OwnerRef:         in.OwnerRef,
+		ContractorRef:    in.ContractorRef,
+		ExecutorRef:      in.ExecutorRef,
+		PlatformRef:      in.PlatformRef,
+		Status:           StatusInitiated,
 		LegacyContractID: in.LegacyContractID,
-		CreatedAt:     time.Now(),
-		UpdatedAt:     time.Now(),
+		CreatedAt:        time.Now(),
+		UpdatedAt:        time.Now(),
 	}
 	node.ProofHash = s.computeHash(node)
 
@@ -146,22 +146,22 @@ func (s *Service) CreateChild(ctx context.Context, in CreateNodeInput) (*Project
 	prevHash := parent.ProofHash
 
 	node := &ProjectNode{
-		Ref:           ref,
-		TenantID:      s.tenantID,
-		ParentID:      &parent.ID,
-		ParentRef:     in.ParentRef,
-		Depth:         parent.Depth + 1,
-		Path:          parent.Path + fmt.Sprintf("%s/", ref),
-		Name:          in.Name,
-		OwnerRef:      parent.ContractorRef, // 上层承接方成为下层业主
-		ContractorRef: in.ContractorRef,
-		ExecutorRef:   in.ExecutorRef,
-		PlatformRef:   in.PlatformRef,
-		Status:        StatusInitiated,
-		PrevHash:      &prevHash,
+		Ref:              ref,
+		TenantID:         s.tenantID,
+		ParentID:         &parent.ID,
+		ParentRef:        in.ParentRef,
+		Depth:            parent.Depth + 1,
+		Path:             parent.Path + fmt.Sprintf("%s/", ref),
+		Name:             in.Name,
+		OwnerRef:         parent.ContractorRef, // 上层承接方成为下层业主
+		ContractorRef:    in.ContractorRef,
+		ExecutorRef:      in.ExecutorRef,
+		PlatformRef:      in.PlatformRef,
+		Status:           StatusInitiated,
+		PrevHash:         &prevHash,
 		LegacyContractID: in.LegacyContractID,
-		CreatedAt:     time.Now(),
-		UpdatedAt:     time.Now(),
+		CreatedAt:        time.Now(),
+		UpdatedAt:        time.Now(),
 	}
 	node.ProofHash = s.computeHash(node)
 
@@ -176,11 +176,11 @@ func (s *Service) BuildFromLegacyContract(ctx context.Context, contractID int64,
 	parentContractID *int64, contractName string, companyRef string) (*ProjectNode, error) {
 
 	in := CreateNodeInput{
-		Name:          contractName,
-		ContractorRef: companyRef,
-		ExecutorRef:   companyRef,
+		Name:             contractName,
+		ContractorRef:    companyRef,
+		ExecutorRef:      companyRef,
 		LegacyContractID: &contractID,
-		TenantID:      s.tenantID,
+		TenantID:         s.tenantID,
 	}
 
 	// 如果有父合同，找到对应的父节点
@@ -521,4 +521,12 @@ func buildTree(nodes []*ProjectNode) *TreeNode {
 		}
 	}
 	return root
+}
+
+func (s *Service) BindContract(ctx context.Context, projectRef string, contractRef string) error {
+	cref := contractRef
+	if err := s.store.UpdateRefs(ctx, projectRef, &cref, nil); err != nil {
+		return fmt.Errorf("bind contract ref failed: %w", err)
+	}
+	return nil
 }

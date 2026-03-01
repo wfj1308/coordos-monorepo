@@ -1,7 +1,7 @@
 // Package store defines persistence interfaces for vault-service.
 //
 // Application/domain code only depends on these interfaces. Concrete
-// implementations (sqlite/rocksdb) are injected at startup.
+// implementations (rocksdb) are injected at startup.
 package store
 
 import (

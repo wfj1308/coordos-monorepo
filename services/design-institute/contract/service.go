@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -39,24 +40,24 @@ type Contract struct {
 	ContractName    string
 	ContractBalance float64
 	ManageRatio     float64
-	SigningSubject   string
-	SigningTime      *time.Time
+	SigningSubject  string
+	SigningTime     *time.Time
 	ContractDate    *time.Time
 	PayType         PayType
-	ContractType    string   // 中标/挂靠
+	ContractType    string // 中标/挂靠
 	State           State
 	StoreState      int
 	CompanyID       *int
 	CustomerID      *int64
 	EmployeeID      *int64
-	ParentID        *int64   // 父合同（委托链）
+	ParentID        *int64 // 父合同（委托链）
 	OwnerID         *int64
 	Catalog         int
-	TotleBalance    float64  // 累计结算
-	TotleGathering  float64  // 累计收款
-	TotleInvoice    float64  // 累计开票
-	ProjectRef      *string  // 对应 ProjectNode
-	GenesisRef      *string  // 对应 GenesisUTXO
+	TotleBalance    float64 // 累计结算
+	TotleGathering  float64 // 累计收款
+	TotleInvoice    float64 // 累计开票
+	ProjectRef      *string // 对应 ProjectNode
+	GenesisRef      *string // 对应 GenesisUTXO
 	Note            string
 	Deleted         bool
 	Draft           int
@@ -71,8 +72,8 @@ type CreateContractInput struct {
 	ContractName    string
 	ContractBalance float64
 	ManageRatio     float64
-	SigningSubject   string
-	SigningTime      *time.Time
+	SigningSubject  string
+	SigningTime     *time.Time
 	PayType         PayType
 	ContractType    string
 	CompanyID       *int
@@ -80,8 +81,10 @@ type CreateContractInput struct {
 	EmployeeID      *int64
 	ParentID        *int64
 	OwnerID         *int64
-	Note            string
-	TenantID        int
+	// Optional project binding. When set, API layer can sync contract/project refs.
+	ProjectRef *string
+	Note       string
+	TenantID   int
 }
 
 type ContractFilter struct {
@@ -165,8 +168,8 @@ func (s *Service) Create(ctx context.Context, in CreateContractInput) (*Contract
 		ContractName:    in.ContractName,
 		ContractBalance: in.ContractBalance,
 		ManageRatio:     in.ManageRatio,
-		SigningSubject:   in.SigningSubject,
-		SigningTime:      in.SigningTime,
+		SigningSubject:  in.SigningSubject,
+		SigningTime:     in.SigningTime,
 		PayType:         in.PayType,
 		ContractType:    in.ContractType,
 		CompanyID:       in.CompanyID,
@@ -181,7 +184,8 @@ func (s *Service) Create(ctx context.Context, in CreateContractInput) (*Contract
 		TenantID:        s.tenantID,
 		CreatedAt:       time.Now(),
 		UpdatedAt:       time.Now(),
-		MigrateStatus:   "NEW",
+		// Keep value compatible with existing DB constraint.
+		MigrateStatus: "PENDING",
 	}
 
 	if err := s.store.Create(ctx, c); err != nil {
@@ -215,6 +219,19 @@ func (s *Service) GetChildren(ctx context.Context, id int64) ([]*Contract, error
 // 财务快照
 func (s *Service) FinanceSummary(ctx context.Context, id int64) (*FinanceSummary, error) {
 	return s.store.FinanceSummary(ctx, id)
+}
+
+// BindProjectRef writes project_ref to contract after creation.
+// This keeps compatibility with existing create payloads while enabling optional linkage.
+func (s *Service) BindProjectRef(ctx context.Context, contractID int64, projectRef string) error {
+	if contractID <= 0 {
+		return fmt.Errorf("invalid contract id")
+	}
+	projectRef = strings.TrimSpace(projectRef)
+	if projectRef == "" {
+		return fmt.Errorf("project_ref is required")
+	}
+	return s.store.SetProjectRef(ctx, contractID, &projectRef, nil)
 }
 
 // 付款前校验 RULE-003：对外付款必须有合同
@@ -282,17 +299,18 @@ func (s *PGStore) Create(ctx context.Context, c *Contract) error {
 			signing_subject, signing_time, contract_date,
 			pay_type, contract_type, state, store_state,
 			company_id, customer_id, employee_id, parent_id, owner_id,
-			catalog, note, deleted, draft, tenant_id,
+			catalog, totle_balance, totle_gathering, totle_invoice,
+			note, deleted, draft, tenant_id,
 			created_at, updated_at, migrate_status
 		) VALUES (
 			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
-			$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24
+			$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27
 		) RETURNING id`,
 		c.Num, c.ContractName, c.ContractBalance, c.ManageRatio,
 		c.SigningSubject, c.SigningTime, c.ContractDate,
 		c.PayType, c.ContractType, c.State, c.StoreState,
 		c.CompanyID, c.CustomerID, c.EmployeeID, c.ParentID, c.OwnerID,
-		c.Catalog, c.Note, c.Deleted, c.Draft, c.TenantID,
+		c.Catalog, 0, 0, 0, c.Note, c.Deleted, c.Draft, c.TenantID,
 		c.CreatedAt, c.UpdatedAt, c.MigrateStatus,
 	).Scan(&c.ID)
 }
@@ -304,7 +322,7 @@ func (s *PGStore) Get(ctx context.Context, id int64) (*Contract, error) {
 		       signing_subject,signing_time,contract_date,pay_type,contract_type,
 		       state,store_state,company_id,customer_id,employee_id,
 		       parent_id,owner_id,catalog,
-		       totle_balance,totle_gathering,totle_invoice,
+		       COALESCE(totle_balance,0),COALESCE(totle_gathering,0),COALESCE(totle_invoice,0),
 		       project_ref,genesis_ref,note,deleted,draft,tenant_id,
 		       created_at,updated_at,migrate_status
 		FROM contracts WHERE id=$1 AND deleted=FALSE`, id,
@@ -328,7 +346,7 @@ func (s *PGStore) GetByLegacyID(ctx context.Context, legacyID int64) (*Contract,
 		       signing_subject,signing_time,contract_date,pay_type,contract_type,
 		       state,store_state,company_id,customer_id,employee_id,
 		       parent_id,owner_id,catalog,
-		       totle_balance,totle_gathering,totle_invoice,
+		       COALESCE(totle_balance,0),COALESCE(totle_gathering,0),COALESCE(totle_invoice,0),
 		       project_ref,genesis_ref,note,deleted,draft,tenant_id,
 		       created_at,updated_at,migrate_status
 		FROM contracts WHERE legacy_id=$1`, legacyID,
@@ -367,20 +385,29 @@ func (s *PGStore) List(ctx context.Context, f ContractFilter) ([]*Contract, int,
 	args := []any{f.TenantID}
 	i := 2
 	if f.CompanyID != nil {
-		where += fmt.Sprintf(" AND company_id=$%d", i); args = append(args, *f.CompanyID); i++
+		where += fmt.Sprintf(" AND company_id=$%d", i)
+		args = append(args, *f.CompanyID)
+		i++
 	}
 	if f.EmployeeID != nil {
-		where += fmt.Sprintf(" AND employee_id=$%d", i); args = append(args, *f.EmployeeID); i++
+		where += fmt.Sprintf(" AND employee_id=$%d", i)
+		args = append(args, *f.EmployeeID)
+		i++
 	}
 	if f.ParentID != nil {
-		where += fmt.Sprintf(" AND parent_id=$%d", i); args = append(args, *f.ParentID); i++
+		where += fmt.Sprintf(" AND parent_id=$%d", i)
+		args = append(args, *f.ParentID)
+		i++
 	}
 	if f.State != nil {
-		where += fmt.Sprintf(" AND state=$%d", i); args = append(args, *f.State); i++
+		where += fmt.Sprintf(" AND state=$%d", i)
+		args = append(args, *f.State)
+		i++
 	}
 	if f.Keyword != "" {
 		where += fmt.Sprintf(" AND (contract_name ILIKE $%d OR num ILIKE $%d)", i, i)
-		args = append(args, "%"+f.Keyword+"%"); i++
+		args = append(args, "%"+f.Keyword+"%")
+		i++
 	}
 
 	var total int
@@ -391,10 +418,14 @@ func (s *PGStore) List(ctx context.Context, f ContractFilter) ([]*Contract, int,
 			signing_subject,signing_time,contract_date,pay_type,contract_type,
 			state,store_state,company_id,customer_id,employee_id,
 			parent_id,owner_id,catalog,
-			totle_balance,totle_gathering,totle_invoice,
+			COALESCE(totle_balance,0),COALESCE(totle_gathering,0),COALESCE(totle_invoice,0),
 			project_ref,genesis_ref,note,deleted,draft,tenant_id,
 			created_at,updated_at,migrate_status
-			FROM contracts WHERE %s ORDER BY created_at DESC LIMIT $%d OFFSET $%d`,
+			FROM contracts WHERE %s
+			ORDER BY
+				CASE WHEN migrate_status='LEGACY' THEN 0 ELSE 1 END,
+				created_at DESC
+			LIMIT $%d OFFSET $%d`,
 			where, i, i+1),
 		append(args, f.Limit, f.Offset)...,
 	)
@@ -426,7 +457,7 @@ func (s *PGStore) GetChildren(ctx context.Context, parentID int64) ([]*Contract,
 		       signing_subject,signing_time,contract_date,pay_type,contract_type,
 		       state,store_state,company_id,customer_id,employee_id,
 		       parent_id,owner_id,catalog,
-		       totle_balance,totle_gathering,totle_invoice,
+		       COALESCE(totle_balance,0),COALESCE(totle_gathering,0),COALESCE(totle_invoice,0),
 		       project_ref,genesis_ref,note,deleted,draft,tenant_id,
 		       created_at,updated_at,migrate_status
 		FROM contracts WHERE parent_id=$1 AND deleted=FALSE ORDER BY created_at`, parentID)
@@ -464,7 +495,7 @@ func (s *PGStore) GetAncestors(ctx context.Context, id int64) ([]*Contract, erro
 		       signing_subject,signing_time,contract_date,pay_type,contract_type,
 		       state,store_state,company_id,customer_id,employee_id,
 		       parent_id,owner_id,catalog,
-		       totle_balance,totle_gathering,totle_invoice,
+		       COALESCE(totle_balance,0),COALESCE(totle_gathering,0),COALESCE(totle_invoice,0),
 		       project_ref,genesis_ref,note,deleted,draft,tenant_id,
 		       created_at,updated_at,migrate_status
 		FROM ancestors WHERE id!=$1 ORDER BY id`, id)

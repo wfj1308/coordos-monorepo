@@ -1,22 +1,47 @@
-# Design Institute UI Console
+# Design Institute UI Console (React + Tailwind)
 
-Static frontend console for validating CoordOS service behaviors.
+Frontend console for validating CoordOS service behaviors.
 
-## Files
+Stack:
+- React 18
+- TailwindCSS
+- Vite
 
-- `index.html`: layout and interaction entry.
-- `styles.css`: visual system (responsive, animated, atmosphere background).
-- `app.js`: environment config, quick actions, request composer, response/log rendering.
+## Install
+
+```bash
+cd ui/design-institute
+npm install
+```
+
+## Run (dev)
+
+```bash
+npm run dev
+```
+
+Open: `http://127.0.0.1:5173`
+
+## Build
+
+```bash
+npm run build
+npm run preview
+```
 
 ## Usage
 
 1. Start backend services:
    - `go run ./services/design-institute`
    - `go run ./services/vault-service`
-2. Open `ui/design-institute/index.html` in browser.
-3. Set base URLs and token, then run quick actions or custom requests.
+2. Open UI in browser.
+3. Run the built-in scenario:
+   - `中北桥梁项目核心主流程闭环`
+   - Covers: project -> contract -> employee -> qualification -> achievement -> invoice -> settlement -> project resources.
+4. Or use quick templates / custom request console for ad-hoc API checks.
 
-## Notes
+## Files
 
-- This is intentionally build-tool-free for fast local validation.
-- Config is stored in `localStorage` to persist across refreshes.
+- `src/App.jsx`: page and request console.
+- `src/index.css`: Tailwind entry and shared component styles.
+- `tailwind.config.js`: theme and scanning config.

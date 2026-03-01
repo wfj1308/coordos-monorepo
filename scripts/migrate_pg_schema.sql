@@ -1,37 +1,29 @@
+﻿-- ============================================================
+-- iCRM -> CoordOS migration schema
+-- Source: MySQL 5.7 (icrm)
+-- Target: PostgreSQL 14 (coordos)
+-- Strategy: dual-write transition, side-by-side rollout, zero downtime
 -- ============================================================
--- iCRM → CoordOS 双写迁移方案
--- MySQL 5.7 (icrm) → PostgreSQL 14 (coordos)
--- 策略：双写过渡，新旧并行，零停机
+
 -- ============================================================
+-- PHASE 0: PostgreSQL target schema
+-- ============================================================
+
+-- Extensions
 --
--- 数据规模：~19500合同 / ~631分公司 / ~18291收款 / ~12630结算
--- 迁移周期：建议4周
---
--- 第一周：PostgreSQL建表 + 存量数据导入 + 双写开关
--- 第二周：50家分公司数据校验 + 结算链验证
--- 第三周：新业务全走新库 + 旧库只读
--- 第四周：旧库下线
--- ============================================================
-
-
--- ============================================================
--- PHASE 0: PostgreSQL 目标库建表
--- ============================================================
-
--- 扩展
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
--- ── 0-1. 分公司/执行体 ──────────────────────────────────────
-CREATE TABLE companies (
+--
+CREATE TABLE IF NOT EXISTS companies (
     id              SERIAL PRIMARY KEY,
-    legacy_id       INT UNIQUE,                    -- 对应 MySQL company.id
+    legacy_id       INT UNIQUE,
     name            VARCHAR(255) NOT NULL,
-    company_type    SMALLINT NOT NULL DEFAULT 2,   -- 1总公司 2分公司 3合伙人
-    parent_id       INT REFERENCES companies(id),  -- 上级公司
+    company_type    SMALLINT NOT NULL DEFAULT 2,   -- 1 HQ, 2 branch, 3 partner
+    parent_id       INT REFERENCES companies(id),  -- parent company
     executor_ref    VARCHAR(500),                  -- v://zhongbei/executor/{id}
     code            VARCHAR(50),
-    license_num     VARCHAR(255),                  -- 统一信用代码
+    license_num     VARCHAR(255),
     charger         VARCHAR(255),
     charger_phone   VARCHAR(255),
     finance_charger VARCHAR(255),
@@ -44,14 +36,14 @@ CREATE TABLE companies (
     tenant_id       INT NOT NULL DEFAULT 10000,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    -- CoordOS新增字段
+--
     migrate_status  VARCHAR(20) NOT NULL DEFAULT 'PENDING'
                     CHECK (migrate_status IN ('PENDING','MAPPED','LEGACY')),
-    genesis_ref     VARCHAR(500)                   -- 关联GenesisUTXO（后期填充）
+    genesis_ref     VARCHAR(500)
 );
 
--- ── 0-2. 员工 ─────────────────────────────────────────────
-CREATE TABLE employees (
+--
+CREATE TABLE IF NOT EXISTS employees (
     id              BIGSERIAL PRIMARY KEY,
     legacy_id       BIGINT UNIQUE,
     name            VARCHAR(255),
@@ -71,76 +63,77 @@ CREATE TABLE employees (
     migrate_status  VARCHAR(20) NOT NULL DEFAULT 'PENDING'
 );
 
--- ── 0-3. 合同（核心表，最复杂） ───────────────────────────
-CREATE TABLE contracts (
-    id              BIGSERIAL PRIMARY KEY,
-    legacy_id       BIGINT UNIQUE,                 -- 对应 MySQL contract.id
-    num             VARCHAR(255),                  -- 合同编号
-    contract_name   VARCHAR(2000),
-    contract_balance DECIMAL(19,2),                -- 合同金额
-    manage_ratio    DECIMAL(19,2),                 -- 管理费比率
-    signing_subject VARCHAR(255),                  -- 签约主体
-    signing_time    TIMESTAMPTZ,
-    contract_date   TIMESTAMPTZ,
-    pay_type        SMALLINT,                      -- 1总价 2费率 3单价 4框架
-    contract_type   VARCHAR(255),                  -- 中标/挂靠
-    state           VARCHAR(255),                  -- 审批状态
-    store_state     SMALLINT DEFAULT 2,            -- 1已作废 2执行中
-    company_id      INT REFERENCES companies(id),
-    customer_id     BIGINT,
-    employee_id     BIGINT REFERENCES employees(id),
-    parent_id       BIGINT REFERENCES contracts(id), -- 父级合同（委托链）
-    owner_id        BIGINT,
-    catalog         SMALLINT DEFAULT 1,
-    totle_balance   DECIMAL(19,2),                 -- 累计结算金额
-    totle_gathering DECIMAL(19,2),                 -- 累计收款金额
-    totle_invoice   DECIMAL(19,2),                 -- 累计开票金额
-    note            TEXT,
-    deleted         BOOLEAN NOT NULL DEFAULT FALSE,
-    draft           SMALLINT DEFAULT 0,
-    tenant_id       INT NOT NULL DEFAULT 10000,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    -- CoordOS新增字段（双写后填充）
-    project_ref     VARCHAR(500),                  -- v://zhongbei/project/{path}
-    genesis_ref     VARCHAR(500),                  -- GenesisUTXO引用
-    migrate_status  VARCHAR(20) NOT NULL DEFAULT 'PENDING'
-                    CHECK (migrate_status IN ('PENDING','MAPPED','LEGACY'))
+-- 0-3. Contracts
+CREATE TABLE IF NOT EXISTS contracts (
+    id               BIGSERIAL PRIMARY KEY,
+    legacy_id        BIGINT UNIQUE,                 -- MySQL contract.id
+    num              VARCHAR(255),                  -- contract number
+    contract_name    VARCHAR(2000),
+    contract_balance DECIMAL(19,2),                 -- contract amount
+    manage_ratio     DECIMAL(19,2),                 -- management fee ratio
+    signing_subject  VARCHAR(255),                  -- signing subject
+    signing_time     TIMESTAMPTZ,
+    contract_date    TIMESTAMPTZ,
+    pay_type         SMALLINT,                      -- 1 total 2 rate 3 unit 4 framework
+    contract_type    VARCHAR(255),                  -- bid / attachment
+    state            VARCHAR(255),                  -- approval state
+    store_state      SMALLINT DEFAULT 2,            -- 1 voided 2 executing
+    company_id       INT REFERENCES companies(id),
+    customer_id      BIGINT,
+    employee_id      BIGINT REFERENCES employees(id),
+    parent_id        BIGINT REFERENCES contracts(id), -- parent contract in delegation chain
+    owner_id         BIGINT,
+    catalog          SMALLINT DEFAULT 1,
+    totle_balance    DECIMAL(19,2),                 -- accumulated settlement amount
+    totle_gathering  DECIMAL(19,2),                 -- accumulated gathering amount
+    totle_invoice    DECIMAL(19,2),                 -- accumulated invoice amount
+    note             TEXT,
+    deleted          BOOLEAN NOT NULL DEFAULT FALSE,
+    draft            SMALLINT DEFAULT 0,
+    tenant_id        INT NOT NULL DEFAULT 10000,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- CoordOS extensions
+    project_ref      VARCHAR(500),                  -- v://zhongbei/project/{path}
+    ref              VARCHAR(500),                  -- v://{tenant}/finance/contract/{id}@v1
+    genesis_ref      VARCHAR(500),                  -- linked GenesisUTXO
+    migrate_status   VARCHAR(20) NOT NULL DEFAULT 'PENDING'
+                     CHECK (migrate_status IN ('PENDING','MAPPED','LEGACY'))
 );
 
--- ── 0-4. 收款单 ───────────────────────────────────────────
-CREATE TABLE gatherings (
-    id              BIGSERIAL PRIMARY KEY,
-    legacy_id       BIGINT UNIQUE,
+-- 0-4. Gatherings
+CREATE TABLE IF NOT EXISTS gatherings (
+    id               BIGSERIAL PRIMARY KEY,
+    legacy_id        BIGINT UNIQUE,
     gathering_number VARCHAR(255),
-    gathering_money DECIMAL(19,2),
-    gathering_date  VARCHAR(255),
-    gathering_state VARCHAR(255),
-    gathering_type  VARCHAR(255),
+    gathering_money  DECIMAL(19,2),
+    gathering_date   VARCHAR(255),
+    gathering_state  VARCHAR(255),
+    gathering_type   VARCHAR(255),
     gathering_person VARCHAR(255),
-    contract_id     BIGINT REFERENCES contracts(id),
-    company_id      INT REFERENCES companies(id),
-    employee_id     BIGINT REFERENCES employees(id),
-    balance_id      BIGINT,                        -- 关联结算单
-    bank_info_id    BIGINT,
-    state           VARCHAR(255),
-    before_money    DECIMAL(19,2),
-    after_money     DECIMAL(19,2),
-    manage_ratio    DECIMAL(19,2),
-    need_manage_fee DECIMAL(19,2),
-    note            VARCHAR(255),
-    draft           SMALLINT DEFAULT 0,
-    deleted         BOOLEAN NOT NULL DEFAULT FALSE,
-    tenant_id       INT NOT NULL DEFAULT 10000,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    -- CoordOS新增
-    project_ref     VARCHAR(500),
-    migrate_status  VARCHAR(20) NOT NULL DEFAULT 'PENDING'
+    contract_id      BIGINT REFERENCES contracts(id),
+    company_id       INT REFERENCES companies(id),
+    employee_id      BIGINT REFERENCES employees(id),
+    balance_id       BIGINT,                        -- linked balance
+    bank_info_id     BIGINT,
+    state            VARCHAR(255),
+    before_money     DECIMAL(19,2),
+    after_money      DECIMAL(19,2),
+    manage_ratio     DECIMAL(19,2),
+    need_manage_fee  DECIMAL(19,2),
+    note             VARCHAR(255),
+    draft            SMALLINT DEFAULT 0,
+    deleted          BOOLEAN NOT NULL DEFAULT FALSE,
+    tenant_id        INT NOT NULL DEFAULT 10000,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- CoordOS extensions
+    project_ref      VARCHAR(500),
+    migrate_status   VARCHAR(20) NOT NULL DEFAULT 'PENDING'
 );
 
--- ── 0-5. 结算单 ───────────────────────────────────────────
-CREATE TABLE balances (
+--
+CREATE TABLE IF NOT EXISTS balances (
     id              BIGSERIAL PRIMARY KEY,
     legacy_id       BIGINT UNIQUE,
     balance_number  VARCHAR(255),
@@ -162,6 +155,7 @@ CREATE TABLE balances (
     state           VARCHAR(255),
     pay_date        TIMESTAMPTZ,
     gathering_id    BIGINT REFERENCES gatherings(id),
+    contract_id     BIGINT REFERENCES contracts(id),
     employee_id     BIGINT REFERENCES employees(id),
     bank_id         BIGINT,
     pay_employee_id BIGINT,
@@ -171,15 +165,16 @@ CREATE TABLE balances (
     tenant_id       INT NOT NULL DEFAULT 10000,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    -- CoordOS新增
+--
     project_ref     VARCHAR(500),
-    genesis_ref     VARCHAR(500),                  -- 消耗的GenesisUTXO
-    utxo_ref        VARCHAR(500),                  -- 产出的UTXO
+    genesis_ref     VARCHAR(500),
+    utxo_ref        VARCHAR(500),
+    settlement_ref  VARCHAR(500),                  -- v://{tenant}/finance/settlement/{id}@v1
     migrate_status  VARCHAR(20) NOT NULL DEFAULT 'PENDING'
 );
 
--- ── 0-6. 发票 ─────────────────────────────────────────────
-CREATE TABLE invoices (
+--
+CREATE TABLE IF NOT EXISTS invoices (
     id              BIGSERIAL PRIMARY KEY,
     legacy_id       BIGINT UNIQUE,
     invoice_code    VARCHAR(255),
@@ -202,17 +197,17 @@ CREATE TABLE invoices (
     tenant_id       INT NOT NULL DEFAULT 10000,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    -- CoordOS新增
+--
     project_ref     VARCHAR(500),
     migrate_status  VARCHAR(20) NOT NULL DEFAULT 'PENDING'
 );
 
--- ── 0-7. 图纸（双写后对接SPU系统） ──────────────────────
-CREATE TABLE drawings (
+--
+CREATE TABLE IF NOT EXISTS drawings (
     id              BIGSERIAL PRIMARY KEY,
     legacy_id       BIGINT UNIQUE,
     num             VARCHAR(255),
-    major           VARCHAR(255),                  -- 专业
+    major           VARCHAR(255),
     state           VARCHAR(255),
     handle_status   SMALLINT NOT NULL DEFAULT 0,
     result_status   SMALLINT NOT NULL DEFAULT 0,
@@ -226,35 +221,36 @@ CREATE TABLE drawings (
     tenant_id       INT NOT NULL DEFAULT 10000,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    -- CoordOS新增：对接SPU系统
+--
     project_ref     VARCHAR(500),
-    spu_ref         VARCHAR(500),                  -- 对应哪个SPU
-    utxo_ref        VARCHAR(500),                  -- SPU系统打入的UTXO引用
+    spu_ref         VARCHAR(500),
+    utxo_ref        VARCHAR(500),
     migrate_status  VARCHAR(20) NOT NULL DEFAULT 'PENDING'
 );
 
--- ── 0-8. 业绩库（SPU系统打入的UTXO落地表） ──────────────
-CREATE TABLE achievement_utxos (
+--
+CREATE TABLE IF NOT EXISTS achievement_utxos (
     id              BIGSERIAL PRIMARY KEY,
     utxo_ref        VARCHAR(500) NOT NULL UNIQUE,  -- v://zhongbei/utxo/{id}
     spu_ref         VARCHAR(500) NOT NULL,
     project_ref     VARCHAR(500) NOT NULL,
-    executor_ref    VARCHAR(500) NOT NULL,          -- 分院/个人
-    genesis_ref     VARCHAR(500),                  -- 关联GenesisUTXO
-    contract_id     BIGINT REFERENCES contracts(id), -- 关联合同（人工或自动匹配）
-    payload         JSONB,                         -- 产出内容
+    executor_ref    VARCHAR(500) NOT NULL,
+    genesis_ref     VARCHAR(500),
+    contract_id     BIGINT REFERENCES contracts(id),
+    payload         JSONB,
     proof_hash      VARCHAR(255) NOT NULL,
     status          VARCHAR(20) NOT NULL DEFAULT 'PENDING'
                     CHECK (status IN ('PENDING','SETTLED','DISPUTED','LEGACY')),
     source          VARCHAR(20) NOT NULL DEFAULT 'SPU_INGEST'
                     CHECK (source IN ('SPU_INGEST','LEGACY_IMPORT','MANUAL')),
+    experience_ref  VARCHAR(500),                  -- v://{tenant}/experience/project/{project_ref}/{utxo_ref}@v1
     tenant_id       INT NOT NULL DEFAULT 10000,
     ingested_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     settled_at      TIMESTAMPTZ
 );
 
--- ── 0-9. 迁移日志（追踪每条记录的迁移状态） ─────────────
-CREATE TABLE migration_log (
+--
+CREATE TABLE IF NOT EXISTS migration_log (
     id              BIGSERIAL PRIMARY KEY,
     table_name      VARCHAR(100) NOT NULL,
     legacy_id       BIGINT NOT NULL,
@@ -266,21 +262,28 @@ CREATE TABLE migration_log (
     UNIQUE (table_name, legacy_id)
 );
 
--- ── 0-10. 索引 ────────────────────────────────────────────
-CREATE INDEX idx_contracts_company    ON contracts(company_id);
-CREATE INDEX idx_contracts_parent     ON contracts(parent_id);
-CREATE INDEX idx_contracts_project    ON contracts(project_ref);
-CREATE INDEX idx_contracts_migrate    ON contracts(migrate_status);
-CREATE INDEX idx_gatherings_contract  ON gatherings(contract_id);
-CREATE INDEX idx_balances_gathering   ON balances(gathering_id);
-CREATE INDEX idx_balances_project     ON balances(project_ref);
-CREATE INDEX idx_invoices_contract    ON invoices(contract_id);
-CREATE INDEX idx_drawings_contract    ON drawings(contract_id);
-CREATE INDEX idx_drawings_utxo        ON drawings(utxo_ref);
-CREATE INDEX idx_achievement_executor ON achievement_utxos(executor_ref);
-CREATE INDEX idx_achievement_project  ON achievement_utxos(project_ref);
-CREATE INDEX idx_achievement_status   ON achievement_utxos(status);
-CREATE INDEX idx_migration_log_table  ON migration_log(table_name, status);
+--
+CREATE INDEX IF NOT EXISTS idx_contracts_company    ON contracts(company_id);
+CREATE INDEX IF NOT EXISTS idx_contracts_parent     ON contracts(parent_id);
+CREATE INDEX IF NOT EXISTS idx_contracts_project    ON contracts(project_ref);
+CREATE INDEX IF NOT EXISTS idx_contracts_migrate    ON contracts(migrate_status);
+CREATE INDEX IF NOT EXISTS idx_gatherings_contract  ON gatherings(contract_id);
+CREATE INDEX IF NOT EXISTS idx_balances_gathering   ON balances(gathering_id);
+CREATE INDEX IF NOT EXISTS idx_balances_contract    ON balances(contract_id);
+CREATE INDEX IF NOT EXISTS idx_balances_project     ON balances(project_ref);
+CREATE INDEX IF NOT EXISTS idx_invoices_contract    ON invoices(contract_id);
+CREATE INDEX IF NOT EXISTS idx_drawings_contract    ON drawings(contract_id);
+CREATE INDEX IF NOT EXISTS idx_drawings_utxo        ON drawings(utxo_ref);
+CREATE INDEX IF NOT EXISTS idx_achievement_executor ON achievement_utxos(executor_ref);
+CREATE INDEX IF NOT EXISTS idx_achievement_project  ON achievement_utxos(project_ref);
+CREATE INDEX IF NOT EXISTS idx_achievement_status   ON achievement_utxos(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_contracts_ref_uq
+    ON contracts(ref) WHERE ref IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_balances_settlement_ref_uq
+    ON balances(settlement_ref) WHERE settlement_ref IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_achievement_experience_ref_uq
+    ON achievement_utxos(experience_ref) WHERE experience_ref IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_migration_log_table  ON migration_log(table_name, status);
 
 -- ============================================================
 -- PHASE 0 EXTENSION: Missing tables for design-institute/vault-service
@@ -420,3 +423,318 @@ CREATE INDEX IF NOT EXISTS idx_approve_tasks_flow     ON approve_tasks(flow_id);
 CREATE INDEX IF NOT EXISTS idx_costtickets_contract   ON costtickets(contract_id);
 CREATE INDEX IF NOT EXISTS idx_payments_contract      ON payments(contract_id);
 CREATE INDEX IF NOT EXISTS idx_payments_project       ON payments(project_ref);
+
+-- ============================================================
+-- PHASE 1 EXTENSION: resolver + qualification + profile
+-- ============================================================
+
+-- Resolver credential ledger (shared by resolver/qualification flows).
+CREATE TABLE IF NOT EXISTS credentials (
+    id           BIGSERIAL PRIMARY KEY,
+    holder_ref   TEXT NOT NULL,
+    holder_type  TEXT NOT NULL CHECK (holder_type IN ('PERSON', 'COMPANY')),
+    cert_type    TEXT NOT NULL,
+    cert_number  TEXT,
+    issued_at    DATE,
+    expires_at   DATE,
+    scope        TEXT NOT NULL DEFAULT '',
+    status       TEXT NOT NULL DEFAULT 'ACTIVE'
+                 CHECK (status IN ('ACTIVE', 'EXPIRED', 'REVOKED', 'SUSPENDED')),
+    ref          VARCHAR(500),
+    tenant_id    INT NOT NULL DEFAULT 10000,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_credentials_holder
+    ON credentials (holder_ref, status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_credentials_type
+    ON credentials (tenant_id, cert_type, status, expires_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_credentials_ref_uq
+    ON credentials(ref) WHERE ref IS NOT NULL;
+
+-- Qualification certificates (company/person).
+CREATE TABLE IF NOT EXISTS qualifications (
+    id              BIGSERIAL PRIMARY KEY,
+    holder_type     VARCHAR(10) NOT NULL CHECK (holder_type IN ('COMPANY','PERSON')),
+    holder_id       BIGINT NOT NULL,
+    holder_name     VARCHAR(255) NOT NULL,
+    executor_ref    VARCHAR(500),
+    qual_type       VARCHAR(50) NOT NULL,
+    cert_no         VARCHAR(255) NOT NULL,
+    issued_by       VARCHAR(255),
+    issued_at       TIMESTAMPTZ,
+    valid_from      TIMESTAMPTZ,
+    valid_until     TIMESTAMPTZ,
+    status          VARCHAR(20) NOT NULL DEFAULT 'VALID'
+                    CHECK (status IN ('VALID','EXPIRED','EXPIRE_SOON','APPLYING','REVOKED')),
+    specialty       VARCHAR(255),
+    level           VARCHAR(50),
+    scope           TEXT,
+    attachment_url  TEXT,
+    note            TEXT,
+    deleted         BOOLEAN NOT NULL DEFAULT FALSE,
+    ref             VARCHAR(500),
+    tenant_id       INT NOT NULL DEFAULT 10000,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_qual_holder       ON qualifications(holder_type, holder_id);
+CREATE INDEX IF NOT EXISTS idx_qual_executor     ON qualifications(executor_ref);
+CREATE INDEX IF NOT EXISTS idx_qual_type_status  ON qualifications(qual_type, status);
+CREATE INDEX IF NOT EXISTS idx_qual_valid_until  ON qualifications(valid_until) WHERE deleted=FALSE;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_qualifications_ref_uq
+    ON qualifications(ref) WHERE ref IS NOT NULL;
+
+-- Qualification assignment ledger: bind one qualification to one active project.
+CREATE TABLE IF NOT EXISTS qualification_assignments (
+    id               BIGSERIAL PRIMARY KEY,
+    qualification_id BIGINT NOT NULL REFERENCES qualifications(id),
+    executor_ref     VARCHAR(500) NOT NULL,
+    project_ref      VARCHAR(500) NOT NULL,
+    status           VARCHAR(20) NOT NULL DEFAULT 'ACTIVE'
+                     CHECK (status IN ('ACTIVE','RELEASED')),
+    tenant_id        INT NOT NULL DEFAULT 10000,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    released_at      TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_qa_project_active
+    ON qualification_assignments(tenant_id, project_ref, status);
+CREATE INDEX IF NOT EXISTS idx_qa_qualification_active
+    ON qualification_assignments(tenant_id, qualification_id, status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_qa_uniq_active_qual
+    ON qualification_assignments(qualification_id) WHERE status='ACTIVE';
+
+-- Achievement profile root table for bid/qualification materials.
+CREATE TABLE IF NOT EXISTS achievement_profiles (
+    id              BIGSERIAL PRIMARY KEY,
+    project_name    VARCHAR(500) NOT NULL,
+    project_type    VARCHAR(30) NOT NULL DEFAULT 'OTHER',
+    building_unit   VARCHAR(255),
+    location        VARCHAR(255),
+    start_date      TIMESTAMPTZ,
+    end_date        TIMESTAMPTZ,
+    our_scope       TEXT,
+    contract_amount DECIMAL(19,2) DEFAULT 0,
+    our_amount      DECIMAL(19,2) DEFAULT 0,
+    scale_metrics   JSONB DEFAULT '{}',
+    contract_id     BIGINT REFERENCES contracts(id),
+    project_ref     VARCHAR(500),
+    utxo_ref        VARCHAR(500),
+    status          VARCHAR(20) NOT NULL DEFAULT 'DRAFT'
+                    CHECK (status IN ('DRAFT','COMPLETE','SUBMITTED')),
+    company_id      INT REFERENCES companies(id),
+    source          VARCHAR(20) NOT NULL DEFAULT 'MANUAL'
+                    CHECK (source IN ('UTXO_AUTO','MANUAL')),
+    note            TEXT,
+    deleted         BOOLEAN NOT NULL DEFAULT FALSE,
+    tenant_id       INT NOT NULL DEFAULT 10000,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS achievement_profile_personnel (
+    id              BIGSERIAL PRIMARY KEY,
+    profile_id      BIGINT NOT NULL REFERENCES achievement_profiles(id) ON DELETE CASCADE,
+    employee_id     BIGINT REFERENCES employees(id),
+    employee_name   VARCHAR(255) NOT NULL,
+    executor_ref    VARCHAR(500),
+    role            VARCHAR(100) NOT NULL,
+    specialty       VARCHAR(100),
+    qual_type       VARCHAR(50),
+    cert_no         VARCHAR(255)
+);
+
+CREATE TABLE IF NOT EXISTS achievement_profile_attachments (
+    id              BIGSERIAL PRIMARY KEY,
+    profile_id      BIGINT NOT NULL REFERENCES achievement_profiles(id) ON DELETE CASCADE,
+    kind            VARCHAR(30) NOT NULL DEFAULT 'OTHER'
+                    CHECK (kind IN ('CONTRACT','REVIEW_CERT','COMPLETION','OTHER')),
+    name            VARCHAR(255) NOT NULL,
+    url             TEXT NOT NULL,
+    utxo_ref        VARCHAR(500),
+    note            TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_profile_company    ON achievement_profiles(company_id);
+CREATE INDEX IF NOT EXISTS idx_profile_type       ON achievement_profiles(project_type);
+CREATE INDEX IF NOT EXISTS idx_profile_status     ON achievement_profiles(status);
+CREATE INDEX IF NOT EXISTS idx_profile_utxo       ON achievement_profiles(utxo_ref);
+CREATE INDEX IF NOT EXISTS idx_profile_end_date   ON achievement_profiles(end_date DESC);
+CREATE INDEX IF NOT EXISTS idx_profile_name       ON achievement_profiles USING gin(to_tsvector('simple', project_name));
+CREATE INDEX IF NOT EXISTS idx_profile_personnel  ON achievement_profile_personnel(profile_id);
+CREATE INDEX IF NOT EXISTS idx_profile_person_emp ON achievement_profile_personnel(employee_id);
+CREATE INDEX IF NOT EXISTS idx_profile_attach     ON achievement_profile_attachments(profile_id);
+
+-- Rights resource ledger (review/sign/invoice authority).
+CREATE TABLE IF NOT EXISTS rights (
+    id           BIGSERIAL PRIMARY KEY,
+    ref          VARCHAR(500) NOT NULL UNIQUE,
+    right_type   VARCHAR(50) NOT NULL,
+    holder_ref   VARCHAR(500) NOT NULL,
+    scope        TEXT NOT NULL DEFAULT '',
+    status       VARCHAR(20) NOT NULL DEFAULT 'ACTIVE'
+                 CHECK (status IN ('ACTIVE','REVOKED','EXPIRED','DISABLED')),
+    valid_from   TIMESTAMPTZ,
+    valid_until  TIMESTAMPTZ,
+    tenant_id    INT NOT NULL DEFAULT 10000,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_rights_holder ON rights(tenant_id, holder_ref, status);
+CREATE INDEX IF NOT EXISTS idx_rights_type   ON rights(tenant_id, right_type, status);
+
+-- ============================================================
+-- PHASE 1 EXTENSION: namespace protocol + publishing center
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS namespaces (
+    id              BIGSERIAL PRIMARY KEY,
+    ref             VARCHAR(500) NOT NULL,
+    parent_ref      VARCHAR(500),
+    name            VARCHAR(255) NOT NULL,
+    inherited_rules TEXT[] NOT NULL DEFAULT '{}',
+    owned_genesis   TEXT[] NOT NULL DEFAULT '{}',
+    tenant_id       INT NOT NULL DEFAULT 10000,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (tenant_id, ref)
+);
+
+CREATE INDEX IF NOT EXISTS idx_namespaces_parent
+    ON namespaces(tenant_id, parent_ref);
+
+CREATE TABLE IF NOT EXISTS namespace_delegations (
+    id         BIGSERIAL PRIMARY KEY,
+    from_ref   VARCHAR(500) NOT NULL,
+    to_ref     VARCHAR(500) NOT NULL,
+    project_ref VARCHAR(500) NOT NULL DEFAULT '',
+    action     VARCHAR(100) NOT NULL DEFAULT '',
+    status     VARCHAR(20) NOT NULL DEFAULT 'ACTIVE'
+               CHECK (status IN ('ACTIVE','DISABLED')),
+    tenant_id  INT NOT NULL DEFAULT 10000,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_namespace_delegations_match
+    ON namespace_delegations(tenant_id, from_ref, to_ref, status, project_ref, action);
+
+CREATE TABLE IF NOT EXISTS review_certificates (
+    id           BIGSERIAL PRIMARY KEY,
+    cert_ref     VARCHAR(500) NOT NULL,
+    project_ref  VARCHAR(500) NOT NULL,
+    drawing_no   VARCHAR(255) NOT NULL,
+    executor_ref VARCHAR(500) NOT NULL,
+    payload      JSONB NOT NULL DEFAULT '{}'::jsonb,
+    tenant_id    INT NOT NULL DEFAULT 10000,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (tenant_id, cert_ref)
+);
+
+CREATE INDEX IF NOT EXISTS idx_review_certificates_project
+    ON review_certificates(tenant_id, project_ref, drawing_no, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS drawing_versions (
+    id              BIGSERIAL PRIMARY KEY,
+    drawing_no      VARCHAR(255) NOT NULL,
+    version_no      INT NOT NULL,
+    project_ref     VARCHAR(500) NOT NULL,
+    review_cert_ref VARCHAR(500) NOT NULL,
+    file_hash       VARCHAR(255),
+    publisher_ref   VARCHAR(500),
+    status          VARCHAR(20) NOT NULL DEFAULT 'CURRENT'
+                    CHECK (status IN ('CURRENT','SUPERSEDED')),
+    payload         JSONB NOT NULL DEFAULT '{}'::jsonb,
+    tenant_id       INT NOT NULL DEFAULT 10000,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (tenant_id, drawing_no, version_no)
+);
+
+CREATE INDEX IF NOT EXISTS idx_drawing_versions_current
+    ON drawing_versions(tenant_id, drawing_no, status, version_no DESC);
+CREATE INDEX IF NOT EXISTS idx_drawing_versions_project
+    ON drawing_versions(tenant_id, project_ref, drawing_no, version_no DESC);
+
+-- ============================================================
+-- PHASE 1 EXTENSION: bidding + compliance + resource bindings
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS bid_profiles (
+    id              BIGSERIAL PRIMARY KEY,
+    ref             VARCHAR(500) NOT NULL UNIQUE,
+    name            VARCHAR(255) NOT NULL,
+    project_ref     VARCHAR(500) NOT NULL,
+    spu_ref         VARCHAR(500) NOT NULL,
+    profile_ids     JSONB NOT NULL DEFAULT '[]'::jsonb,
+    requirements    JSONB NOT NULL DEFAULT '{}'::jsonb,
+    package_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    status          VARCHAR(20) NOT NULL DEFAULT 'DRAFT'
+                    CHECK (status IN ('DRAFT','PUBLISHED','ARCHIVED')),
+    tenant_id       INT NOT NULL DEFAULT 10000,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_bid_profiles_project
+    ON bid_profiles(tenant_id, project_ref, status);
+
+CREATE TABLE IF NOT EXISTS violation_records (
+    id           BIGSERIAL PRIMARY KEY,
+    executor_ref VARCHAR(500) NOT NULL,
+    project_ref  VARCHAR(500) NOT NULL,
+    rule_code    VARCHAR(100) NOT NULL,
+    severity     VARCHAR(20) NOT NULL
+                 CHECK (severity IN ('LOW','MEDIUM','HIGH','CRITICAL')),
+    message      TEXT NOT NULL DEFAULT '',
+    occurred_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    tenant_id    INT NOT NULL DEFAULT 10000,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_violation_executor
+    ON violation_records(tenant_id, executor_ref, occurred_at DESC);
+
+CREATE TABLE IF NOT EXISTS executor_stats (
+    id               BIGSERIAL PRIMARY KEY,
+    executor_ref     VARCHAR(500) NOT NULL,
+    total_projects   INT NOT NULL DEFAULT 0,
+    total_utxos      INT NOT NULL DEFAULT 0,
+    total_violations INT NOT NULL DEFAULT 0,
+    last_violation_at TIMESTAMPTZ,
+    score            INT NOT NULL DEFAULT 0,
+    capability_level VARCHAR(20) NOT NULL DEFAULT 'RISK',
+    tenant_id        INT NOT NULL DEFAULT 10000,
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (tenant_id, executor_ref)
+);
+
+CREATE TABLE IF NOT EXISTS resource_bindings (
+    id            BIGSERIAL PRIMARY KEY,
+    resource_ref  VARCHAR(500) NOT NULL,
+    resource_type VARCHAR(100) NOT NULL,
+    project_ref   VARCHAR(500) NOT NULL,
+    executor_ref  VARCHAR(500) NOT NULL DEFAULT '',
+    spu_ref       VARCHAR(500) NOT NULL DEFAULT '',
+    status        VARCHAR(20) NOT NULL DEFAULT 'ACTIVE'
+                  CHECK (status IN ('ACTIVE','RELEASED')),
+    note          TEXT NOT NULL DEFAULT '',
+    tenant_id     INT NOT NULL DEFAULT 10000,
+    bound_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    released_at   TIMESTAMPTZ,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_resource_bindings_project
+    ON resource_bindings(tenant_id, project_ref, status, bound_at DESC);
+CREATE INDEX IF NOT EXISTS idx_resource_bindings_executor
+    ON resource_bindings(tenant_id, executor_ref, status, bound_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_resource_bindings_active_unique
+    ON resource_bindings(tenant_id, resource_ref) WHERE status='ACTIVE';
+
