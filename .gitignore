@@ -26,6 +26,8 @@ __pycache__/
 /coordos_vault_rocks_native.json
 
 # UI build/deps
+/node_modules/
+/ui/**/node_modules/
 /ui/design-institute/node_modules/
 /ui/design-institute/dist/
 
