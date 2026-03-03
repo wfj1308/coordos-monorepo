@@ -1,0 +1,66 @@
+﻿import { StatusTag } from "./CommonUI";
+
+export default function MainFlowSection({ flowRunning, runMainFlow, resetFlow, flowSteps, flowSummary }) {
+  return (
+    <section className="panel p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">Phase0-7 主流程场景（中北）</h2>
+          <p className="mt-1 text-xs text-slate">
+            覆盖注册入网、招标投标、中标履约、审图验收、结算入池七个阶段。
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={runMainFlow}
+            disabled={flowRunning}
+            className="rounded-lg bg-mint px-4 py-2 text-sm font-medium text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {flowRunning ? "流程执行中..." : "执行 Phase0-7"}
+          </button>
+          <button
+            onClick={resetFlow}
+            disabled={flowRunning}
+            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm"
+          >
+            重置步骤
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-3">
+        {flowSteps.map((step, idx) => (
+          <article key={step.key} className="rounded-xl border border-slate-200 bg-white p-4">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-sm font-medium">
+                {idx + 1}. {step.title}
+              </div>
+              <StatusTag status={step.status} />
+            </div>
+            <p className="mt-1 text-xs text-slate">{step.detail}</p>
+            {step.elapsedMs != null && (
+              <p className="mt-1 text-xs text-slate">耗时: {step.elapsedMs} ms</p>
+            )}
+            {step.result && (
+              <pre className="mt-2 overflow-auto rounded-lg bg-slate-900 p-3 text-xs text-slate-100">
+                {JSON.stringify(step.result, null, 2)}
+              </pre>
+            )}
+            {step.error && (
+              <pre className="mt-2 overflow-auto rounded-lg bg-red-950 p-3 text-xs text-red-100">{step.error}</pre>
+            )}
+          </article>
+        ))}
+      </div>
+
+      {flowSummary && (
+        <div className="mt-4 rounded-xl border border-slate-300 bg-slate-50 p-4 text-xs">
+          <div className="font-semibold">运行摘要</div>
+          <pre className="mt-2 overflow-auto rounded bg-white p-3 text-xs text-slate-700">
+            {JSON.stringify(flowSummary, null, 2)}
+          </pre>
+        </div>
+      )}
+    </section>
+  );
+}

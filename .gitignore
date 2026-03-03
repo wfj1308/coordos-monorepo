@@ -34,6 +34,15 @@ __pycache__/
 # Local runtime temp
 /tmp_logs/
 
+# Local binaries/temp artifacts
+*.exe
+*.exe~
+*.log
+.tmp_*
+nul
+.tmp_cleanup_candidates.txt
+.tmp_untracked_list.txt
+
 # Do not commit tests (per repo policy)
 *_test.go
 *.test.js

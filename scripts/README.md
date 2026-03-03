@@ -1,19 +1,16 @@
 ﻿# Scripts Quick Guide
 
-This directory only keeps production migration/backfill/report utilities.
+This directory stores production-use scripts only.
 
-## Kept scripts
-- `migrate.py`: legacy MySQL -> PostgreSQL data migration helper.
-- `migrate.sh`: code migration helper from old repo.
-- `migrate_pg_schema.sql`: PostgreSQL schema baseline.
-- `add_*.sql`, `backfill_*.sql`, `query_*.sql`: PG maintenance and data-fix SQL.
-- `gen_qual_report.js`, `gen_qual_report_from_api.*`: qualification report export.
+## Layout
+- `scripts/migrate_pg_schema.sql`: PostgreSQL baseline schema.
+- `scripts/add_*.sql`, `scripts/backfill_*.sql`, `scripts/query_*.sql`: migration/backfill/query helpers.
+- `scripts/migrations/`: incremental schema scripts organized by domain.
+- `scripts/gen_qual_report.js`: qualification report export.
 
-## Removed on purpose
-- all `*_test.go` files
-- all test/e2e/smoke scripts
-- all flow-run validation scripts
-- duplicated internal migration helper (`scripts/internal/migrate_code.sh`)
+## Conventions
+- Do not place SQL in service source folders; put all SQL under `scripts/`.
+- Do not keep local smoke/test/demo scripts in this repo tree.
 
 ## Build check
 ```bash
