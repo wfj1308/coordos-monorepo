@@ -27,24 +27,24 @@ const (
 
 type ProjectNode struct {
 	ID               int64
-	Ref              string // v://zhongbei/project/{path}
+	Ref              string
 	TenantID         int
 	ParentID         *int64
 	ParentRef        *string
-	Depth            int    // 0=根节点
-	Path             string // 物化路径 /1/3/7/
+	Depth            int
+	Path             string
 	Name             string
-	OwnerRef         string // 业主
-	ContractorRef    string // 承接方（总院）
-	ExecutorRef      string // 执行方（分院/个人）
-	PlatformRef      string
+	OwnerRef         *string
+	ContractorRef    *string
+	ExecutorRef      *string
+	PlatformRef      *string
 	ContractRef      *string
 	ProcurementRef   *string
 	GenesisRef       *string
 	Status           Status
-	ProofHash        string
+	ProofHash        *string
 	PrevHash         *string
-	LegacyContractID *int64 // 对应旧系统 contract.id
+	LegacyContractID *int64
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 }
@@ -52,10 +52,10 @@ type ProjectNode struct {
 type CreateNodeInput struct {
 	ParentRef        *string
 	Name             string
-	OwnerRef         string
-	ContractorRef    string
-	ExecutorRef      string
-	PlatformRef      string
+	OwnerRef         *string
+	ContractorRef    *string
+	ExecutorRef      *string
+	PlatformRef      *string
 	LegacyContractID *int64
 	TenantID         int
 }
@@ -98,7 +98,7 @@ func NewService(store Store, tenantID int) *Service {
 
 // ── 创建根节点（总院发起的项目） ──────────────────────────────
 func (s *Service) CreateRoot(ctx context.Context, in CreateNodeInput) (*ProjectNode, error) {
-	if in.OwnerRef == "" || in.ContractorRef == "" {
+	if in.OwnerRef == nil || *in.OwnerRef == "" || in.ContractorRef == nil || *in.ContractorRef == "" {
 		return nil, fmt.Errorf("OwnerRef 和 ContractorRef 不能为空")
 	}
 
@@ -118,7 +118,8 @@ func (s *Service) CreateRoot(ctx context.Context, in CreateNodeInput) (*ProjectN
 		CreatedAt:        time.Now(),
 		UpdatedAt:        time.Now(),
 	}
-	node.ProofHash = s.computeHash(node)
+	hash := s.computeHash(node)
+	node.ProofHash = &hash
 
 	if err := s.store.Create(ctx, node); err != nil {
 		return nil, fmt.Errorf("创建根节点失败: %w", err)
@@ -143,7 +144,6 @@ func (s *Service) CreateChild(ctx context.Context, in CreateNodeInput) (*Project
 	}
 
 	ref := s.genRef(fmt.Sprintf("d%d", parent.Depth+1), in.Name)
-	prevHash := parent.ProofHash
 
 	node := &ProjectNode{
 		Ref:              ref,
@@ -158,12 +158,13 @@ func (s *Service) CreateChild(ctx context.Context, in CreateNodeInput) (*Project
 		ExecutorRef:      in.ExecutorRef,
 		PlatformRef:      in.PlatformRef,
 		Status:           StatusInitiated,
-		PrevHash:         &prevHash,
+		PrevHash:         parent.ProofHash,
 		LegacyContractID: in.LegacyContractID,
 		CreatedAt:        time.Now(),
 		UpdatedAt:        time.Now(),
 	}
-	node.ProofHash = s.computeHash(node)
+	hash := s.computeHash(node)
+	node.ProofHash = &hash
 
 	if err := s.store.Create(ctx, node); err != nil {
 		return nil, fmt.Errorf("创建子节点失败: %w", err)
@@ -175,15 +176,15 @@ func (s *Service) CreateChild(ctx context.Context, in CreateNodeInput) (*Project
 func (s *Service) BuildFromLegacyContract(ctx context.Context, contractID int64,
 	parentContractID *int64, contractName string, companyRef string) (*ProjectNode, error) {
 
+	companyRefPtr := &companyRef
 	in := CreateNodeInput{
 		Name:             contractName,
-		ContractorRef:    companyRef,
-		ExecutorRef:      companyRef,
+		ContractorRef:    companyRefPtr,
+		ExecutorRef:      companyRefPtr,
 		LegacyContractID: &contractID,
 		TenantID:         s.tenantID,
 	}
 
-	// 如果有父合同，找到对应的父节点
 	if parentContractID != nil {
 		parent, err := s.store.GetByLegacyContractID(ctx, *parentContractID)
 		if err == nil && parent != nil {
@@ -193,7 +194,8 @@ func (s *Service) BuildFromLegacyContract(ctx context.Context, contractID int64,
 	}
 
 	if in.ParentRef == nil {
-		in.OwnerRef = "v://zhongbei/executor/owner/default"
+		defaultOwner := "v://zhongbei/executor/owner/default"
+		in.OwnerRef = &defaultOwner
 		return s.CreateRoot(ctx, in)
 	}
 	return s.CreateChild(ctx, in)
@@ -213,6 +215,7 @@ func (s *Service) Transition(ctx context.Context, ref string, to Status) error {
 	node.Status = to
 	node.UpdatedAt = time.Now()
 	hash := s.computeHash(node)
+	node.ProofHash = &hash
 
 	return s.store.UpdateStatus(ctx, ref, to, hash)
 }
@@ -262,8 +265,20 @@ func (s *Service) genRef(kind, name string) string {
 
 func (s *Service) computeHash(n *ProjectNode) string {
 	h := sha256.New()
+	ownerRef := ""
+	if n.OwnerRef != nil {
+		ownerRef = *n.OwnerRef
+	}
+	contractorRef := ""
+	if n.ContractorRef != nil {
+		contractorRef = *n.ContractorRef
+	}
+	executorRef := ""
+	if n.ExecutorRef != nil {
+		executorRef = *n.ExecutorRef
+	}
 	fmt.Fprintf(h, "%s|%s|%s|%s|%s|%s",
-		n.Ref, n.OwnerRef, n.ContractorRef, n.ExecutorRef,
+		n.Ref, ownerRef, contractorRef, executorRef,
 		n.Status, n.UpdatedAt.Format(time.RFC3339Nano))
 	if n.PrevHash != nil {
 		fmt.Fprintf(h, "|%s", *n.PrevHash)

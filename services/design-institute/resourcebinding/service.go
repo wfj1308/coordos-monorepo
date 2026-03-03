@@ -29,6 +29,10 @@ type Binding struct {
 	ReleasedAt   *time.Time `json:"released_at,omitempty"`
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
+
+	// 三类资源显式绑定（用证留痕）
+	AchievementUTXOID *int64 `json:"achievement_utxo_id,omitempty"`
+	CredentialID      *int64 `json:"credential_id,omitempty"`
 }
 
 type CreateInput struct {
@@ -38,6 +42,10 @@ type CreateInput struct {
 	ExecutorRef  string `json:"executor_ref"`
 	SPURef       string `json:"spu_ref"`
 	Note         string `json:"note"`
+
+	// 三类资源绑定
+	AchievementUTXOID *int64 `json:"achievement_utxo_id,omitempty"`
+	CredentialID      *int64 `json:"credential_id,omitempty"`
 }
 
 type Filter struct {
@@ -76,17 +84,19 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Binding, error) 
 	}
 	now := time.Now().UTC()
 	item := &Binding{
-		ResourceRef:  resourceRef,
-		ResourceType: resourceType,
-		ProjectRef:   projectRef,
-		ExecutorRef:  strings.TrimSpace(in.ExecutorRef),
-		SPURef:       strings.TrimSpace(in.SPURef),
-		Status:       StatusActive,
-		Note:         strings.TrimSpace(in.Note),
-		TenantID:     s.tenantID,
-		BoundAt:      now,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ResourceRef:       resourceRef,
+		ResourceType:      resourceType,
+		ProjectRef:        projectRef,
+		ExecutorRef:       strings.TrimSpace(in.ExecutorRef),
+		SPURef:            strings.TrimSpace(in.SPURef),
+		Status:            StatusActive,
+		Note:              strings.TrimSpace(in.Note),
+		TenantID:          s.tenantID,
+		BoundAt:           now,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+		AchievementUTXOID: in.AchievementUTXOID,
+		CredentialID:      in.CredentialID,
 	}
 	if err := s.store.Create(ctx, item); err != nil {
 		return nil, err
@@ -120,8 +130,9 @@ func (s *PGStore) Create(ctx context.Context, item *Binding) error {
 	return s.db.QueryRowContext(ctx, `
 		INSERT INTO resource_bindings (
 			resource_ref, resource_type, project_ref, executor_ref, spu_ref,
-			status, note, tenant_id, bound_at, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+			status, note, tenant_id, bound_at, created_at, updated_at,
+			achievement_utxo_id, credential_id
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 		RETURNING id
 	`,
 		item.ResourceRef,
@@ -135,6 +146,8 @@ func (s *PGStore) Create(ctx context.Context, item *Binding) error {
 		item.BoundAt,
 		item.CreatedAt,
 		item.UpdatedAt,
+		item.AchievementUTXOID,
+		item.CredentialID,
 	).Scan(&item.ID)
 }
 
@@ -171,7 +184,8 @@ func (s *PGStore) List(ctx context.Context, tenantID int, f Filter) ([]*Binding,
 
 	listSQL := fmt.Sprintf(`
 		SELECT id, resource_ref, resource_type, project_ref, executor_ref, spu_ref, status,
-		       note, tenant_id, bound_at, released_at, created_at, updated_at
+		       note, tenant_id, bound_at, released_at, created_at, updated_at,
+		       achievement_utxo_id, credential_id
 		FROM resource_bindings
 		WHERE %s
 		ORDER BY id DESC
@@ -201,6 +215,8 @@ func (s *PGStore) List(ctx context.Context, tenantID int, f Filter) ([]*Binding,
 			&item.ReleasedAt,
 			&item.CreatedAt,
 			&item.UpdatedAt,
+			&item.AchievementUTXOID,
+			&item.CredentialID,
 		); err != nil {
 			return nil, 0, err
 		}

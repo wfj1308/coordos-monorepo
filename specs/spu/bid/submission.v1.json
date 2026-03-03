@@ -1,0 +1,106 @@
+{
+  "$schema": "https://coordos.io/schemas/spu/v1",
+  "spu_ref": "v://zhongbei/spu/bid/submission@v1",
+  "name": "Bid Submission",
+  "version": "v1",
+  "domain": "bid",
+  "stage": "BIDDING",
+  "kind": "RECORD",
+  "status": "ACTIVE",
+  "spec_basis": ["Tendering Law", "Company Bid SOP v1"],
+  "description": "投标文件提交SPU：投标专员执行，提交已消耗资源的投标文件UTXO。提交后保持注册工程师占用状态直至评标结束。",
+  "product_unit": {
+    "deliverables": [
+      {
+        "name": "Submission receipt",
+        "format": ["PDF"],
+        "required": true,
+        "completeness_check": ["platform_receipt_no", "submitted_at", "operator"]
+      }
+    ]
+  },
+  "parameter_unit": {
+    "input_parameters": {
+      "submission_channel": { "label": "Submission channel", "type": "enum", "values": ["ONLINE", "OFFLINE", "HYBRID"] }
+    },
+    "derived_parameters": {},
+    "input_resource_refs": {
+      "bid_prepared_utxo": {
+        "label": "Prepared bid package",
+        "kind": "BID_PREPARED_UTXO",
+        "required": true,
+        "fields_needed": ["proof_hash", "deadline"]
+      },
+      "authorization_utxo": {
+        "label": "Submission authorization",
+        "kind": "AUTHORIZATION_LETTER",
+        "required": true,
+        "fields_needed": ["authorized_person", "valid_until"]
+      }
+    }
+  },
+  "process_unit": {
+    "total_steps": 3,
+    "steps": [
+      {
+        "seq": 1,
+        "name": "Final package check",
+        "skill": "compliance_review",
+        "inputs": ["bid_prepared_utxo"],
+        "output_kind": "BID_READY_UTXO",
+        "auto_executable": true,
+        "confidence_threshold": 0.95
+      },
+      {
+        "seq": 2,
+        "name": "Submit bid",
+        "skill": "bid_submission",
+        "inputs": ["bid_ready_utxo", "authorization_utxo"],
+        "output_kind": "BID_SUBMISSION_RECEIPT_UTXO",
+        "auto_executable": false
+      },
+      {
+        "seq": 3,
+        "name": "Client coordination log",
+        "skill": "client_coordination",
+        "inputs": ["bid_submission_receipt_utxo"],
+        "output_kind": "BID_SUBMITTED_UTXO",
+        "auto_executable": false
+      }
+    ]
+  },
+  "executor_requirement": {
+    "capability_level": "ASSISTANT_ENGINEER",
+    "required_skills": ["bid_submission", "client_coordination", "compliance_review"],
+    "qualification": "ROLE_MARKET_MANAGER",
+    "energy": {
+      "kind": "LABOR",
+      "base_days": 1,
+      "range_days": [1, 3]
+    },
+    "ai_executable": {
+      "full_auto_condition": "submission_channel=ONLINE AND platform_api_available=true",
+      "assisted_condition": "submission_channel=HYBRID",
+      "human_required_condition": "submission_channel=OFFLINE"
+    }
+  },
+  "acceptance_spec": {
+    "parameter_checks": [
+      { "check": "submission_channel in [ONLINE,OFFLINE,HYBRID]", "spec_ref": "SOP:BidSubmit", "blocking": true }
+    ],
+    "completeness_checks": ["product_unit.deliverables ALL present"],
+    "evidence_required": [
+      { "kind": "BID_SUBMISSION_RECEIPT_UTXO", "description": "Submission receipt", "blocking": true }
+    ]
+  },
+  "utxo_state_machine": {
+    "states": ["DRAFT", "REVIEWED", "APPROVED", "DELIVERABLE"],
+    "transitions": [
+      { "from": "DRAFT", "to": "REVIEWED", "condition": "evidence_required ALL present", "auto": true },
+      { "from": "REVIEWED", "to": "APPROVED", "condition": "submission_receipt_verified=true", "auto": true },
+      { "from": "APPROVED", "to": "DELIVERABLE", "condition": "submission_logged=true", "auto": true }
+    ]
+  },
+  "upstream_spu_refs": ["v://zhongbei/spu/bid/preparation@v1"],
+  "downstream_spu_refs": ["v://zhongbei/spu/bid/award@v1"]
+}

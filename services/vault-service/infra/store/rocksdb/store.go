@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -43,12 +44,13 @@ type DB struct {
 
 // persistedState holds all logical buckets required by store interfaces.
 type persistedState struct {
-	ProjectNodes map[string]json.RawMessage `json:"project_nodes"`
-	Genesis      map[string]json.RawMessage `json:"genesis"`
-	Contracts    map[string]json.RawMessage `json:"contracts"`
-	Parcels      map[string]json.RawMessage `json:"parcels"`
-	UTXOs        map[string]json.RawMessage `json:"utxos"`
-	Settlements  map[string]json.RawMessage `json:"settlements"`
+	ProjectNodes  map[string]json.RawMessage `json:"project_nodes"`
+	Genesis       map[string]json.RawMessage `json:"genesis"`
+	Contracts     map[string]json.RawMessage `json:"contracts"`
+	Parcels       map[string]json.RawMessage `json:"parcels"`
+	UTXOs         map[string]json.RawMessage `json:"utxos"`
+	UTXORelations map[string]json.RawMessage `json:"utxo_relations"`
+	Settlements   map[string]json.RawMessage `json:"settlements"`
 
 	Wallets map[string]store.Wallet        `json:"wallets"`
 	Ledgers map[string][]store.LedgerEntry `json:"ledgers"`
@@ -57,15 +59,16 @@ type persistedState struct {
 
 func newState() *persistedState {
 	return &persistedState{
-		ProjectNodes: make(map[string]json.RawMessage),
-		Genesis:      make(map[string]json.RawMessage),
-		Contracts:    make(map[string]json.RawMessage),
-		Parcels:      make(map[string]json.RawMessage),
-		UTXOs:        make(map[string]json.RawMessage),
-		Settlements:  make(map[string]json.RawMessage),
-		Wallets:      make(map[string]store.Wallet),
-		Ledgers:      make(map[string][]store.LedgerEntry),
-		Audits:       make(map[string]store.AuditEvent),
+		ProjectNodes:  make(map[string]json.RawMessage),
+		Genesis:       make(map[string]json.RawMessage),
+		Contracts:     make(map[string]json.RawMessage),
+		Parcels:       make(map[string]json.RawMessage),
+		UTXOs:         make(map[string]json.RawMessage),
+		UTXORelations: make(map[string]json.RawMessage),
+		Settlements:   make(map[string]json.RawMessage),
+		Wallets:       make(map[string]store.Wallet),
+		Ledgers:       make(map[string][]store.LedgerEntry),
+		Audits:        make(map[string]store.AuditEvent),
 	}
 }
 
@@ -84,6 +87,9 @@ func (s *persistedState) ensure() {
 	}
 	if s.UTXOs == nil {
 		s.UTXOs = make(map[string]json.RawMessage)
+	}
+	if s.UTXORelations == nil {
+		s.UTXORelations = make(map[string]json.RawMessage)
 	}
 	if s.Settlements == nil {
 		s.Settlements = make(map[string]json.RawMessage)
@@ -132,14 +138,15 @@ func (d *DB) Path() string { return d.path }
 
 func (d *DB) Close() error { return nil }
 
-func (d *DB) ProjectTree() store.ProjectTreeStore { return &projectTreeStore{db: d} }
-func (d *DB) Genesis() store.GenesisStore         { return &genesisStore{db: d} }
-func (d *DB) Contracts() store.ContractStore      { return &contractStore{db: d} }
-func (d *DB) Parcels() store.ParcelStore          { return &parcelStore{db: d} }
-func (d *DB) UTXOs() store.UTXOStore              { return &utxoStore{db: d} }
-func (d *DB) Settlements() store.SettlementStore  { return &settlementStore{db: d} }
-func (d *DB) Wallets() store.WalletStore          { return &walletStore{db: d} }
-func (d *DB) Audit() store.AuditStore             { return &auditStore{db: d} }
+func (d *DB) ProjectTree() store.ProjectTreeStore    { return &projectTreeStore{db: d} }
+func (d *DB) Genesis() store.GenesisStore            { return &genesisStore{db: d} }
+func (d *DB) Contracts() store.ContractStore         { return &contractStore{db: d} }
+func (d *DB) Parcels() store.ParcelStore             { return &parcelStore{db: d} }
+func (d *DB) UTXOs() store.UTXOStore                 { return &utxoStore{db: d} }
+func (d *DB) UTXORelations() store.UTXORelationStore { return &utxoRelationStore{db: d} }
+func (d *DB) Settlements() store.SettlementStore     { return &settlementStore{db: d} }
+func (d *DB) Wallets() store.WalletStore             { return &walletStore{db: d} }
+func (d *DB) Audit() store.AuditStore                { return &auditStore{db: d} }
 
 func normalizePath(path string) (string, error) {
 	p := strings.TrimSpace(path)
@@ -714,7 +721,11 @@ func (s *utxoStore) Create(tenantID string, u *store.UTXO) error {
 
 	s.db.mu.Lock()
 	defer s.db.mu.Unlock()
-	s.db.state.UTXOs[refKey(tenantID, u.Ref)] = raw
+	k := refKey(tenantID, u.Ref)
+	if _, ok := s.db.state.UTXOs[k]; ok {
+		return fmt.Errorf("utxo already exists: %s", u.Ref)
+	}
+	s.db.state.UTXOs[k] = raw
 	return s.db.persistLocked()
 }
 
@@ -732,7 +743,79 @@ func (s *utxoStore) Get(tenantID string, ref pc.VRef) (*store.UTXO, error) {
 	return &u, nil
 }
 
-func (s *utxoStore) Update(tenantID string, u *store.UTXO) error { return s.Create(tenantID, u) }
+func (s *utxoStore) Update(tenantID string, u *store.UTXO) error {
+	if u == nil {
+		return errors.New("nil utxo")
+	}
+	if u.TenantID == "" {
+		u.TenantID = tenantID
+	}
+	if u.CreatedAt.IsZero() {
+		return errors.New("created_at is required for utxo update")
+	}
+
+	k := refKey(tenantID, u.Ref)
+	s.db.mu.Lock()
+	defer s.db.mu.Unlock()
+
+	rawExisting, ok := s.db.state.UTXOs[k]
+	if !ok {
+		return fmt.Errorf("utxo not found: %s", u.Ref)
+	}
+	var existing store.UTXO
+	if err := unmarshalRaw(rawExisting, &existing); err != nil {
+		return err
+	}
+	if strings.EqualFold(strings.TrimSpace(existing.Status), "SEALED") {
+		return fmt.Errorf("utxo is sealed and immutable: %s", u.Ref)
+	}
+
+	// Immutable fields: only status can move forward before SEALED.
+	if existing.Ref != u.Ref ||
+		existing.ProjectRef != u.ProjectRef ||
+		existing.ParcelRef != u.ParcelRef ||
+		existing.GenesisRef != u.GenesisRef ||
+		!reflect.DeepEqual(existing.InputRefs, u.InputRefs) ||
+		existing.Kind != u.Kind ||
+		existing.TenantID != u.TenantID ||
+		!existing.CreatedAt.Equal(u.CreatedAt) ||
+		existing.ProofHash != u.ProofHash ||
+		existing.PrevHash != u.PrevHash ||
+		!reflect.DeepEqual(existing.Payload, u.Payload) {
+		return fmt.Errorf("utxo immutable fields changed: %s", u.Ref)
+	}
+
+	nextStatus := strings.ToUpper(strings.TrimSpace(u.Status))
+	if nextStatus == "" {
+		nextStatus = existing.Status
+	}
+	if nextStatus != existing.Status && !isAllowedUTXOStatusTransition(existing.Status, nextStatus) {
+		return fmt.Errorf("invalid utxo status transition: %s -> %s", existing.Status, nextStatus)
+	}
+	u.Status = nextStatus
+
+	rawUpdated, err := marshalRaw(u)
+	if err != nil {
+		return err
+	}
+	s.db.state.UTXOs[k] = rawUpdated
+	return s.db.persistLocked()
+}
+
+func isAllowedUTXOStatusTransition(from, to string) bool {
+	f := strings.ToUpper(strings.TrimSpace(from))
+	t := strings.ToUpper(strings.TrimSpace(to))
+	if f == t {
+		return true
+	}
+	allowed := map[string]map[string]bool{
+		"DRAFT":       {"REVIEWED": true, "SEALED": true},
+		"REVIEWED":    {"APPROVED": true, "SEALED": true},
+		"APPROVED":    {"SEALED": true},
+		"DELIVERABLE": {"SEALED": true},
+	}
+	return allowed[f][t]
+}
 
 func (s *utxoStore) ListByProject(tenantID string, projectRef pc.VRef) ([]*store.UTXO, error) {
 	prefix := tenantID + "|"
@@ -776,6 +859,264 @@ func (s *utxoStore) ListByParcel(tenantID string, parcelRef pc.VRef) ([]*store.U
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
 	return out, nil
+}
+
+type utxoRelationStore struct{ db *DB }
+
+func (s *utxoRelationStore) Create(tenantID string, r *store.UTXORelation) error {
+	if r == nil {
+		return errors.New("nil utxo relation")
+	}
+	if r.TenantID == "" {
+		r.TenantID = tenantID
+	}
+	if strings.TrimSpace(string(r.Ref)) == "" {
+		r.Ref = pc.VRef(fmt.Sprintf("v://%s/utxo-relation/%d", tenantID, time.Now().UnixNano()))
+	}
+	if strings.TrimSpace(string(r.FromRef)) == "" || strings.TrimSpace(string(r.ToRef)) == "" {
+		return errors.New("from_ref and to_ref are required")
+	}
+	if strings.TrimSpace(string(r.ChangeUTXORef)) == "" {
+		return errors.New("change_utxo_ref is required")
+	}
+	if r.FromRef == r.ToRef {
+		return errors.New("from_ref and to_ref must be different")
+	}
+	normalizedType, err := normalizeUTXORelationType(r.Type)
+	if err != nil {
+		return err
+	}
+	r.Type = normalizedType
+	if r.CreatedAt.IsZero() {
+		r.CreatedAt = time.Now().UTC()
+	}
+	if r.Payload == nil {
+		r.Payload = map[string]interface{}{}
+	}
+
+	s.db.mu.Lock()
+	defer s.db.mu.Unlock()
+
+	k := refKey(tenantID, r.Ref)
+	if _, ok := s.db.state.UTXORelations[k]; ok {
+		return fmt.Errorf("utxo relation already exists: %s", r.Ref)
+	}
+	prefix := tenantID + "|"
+	for key, raw := range s.db.state.UTXORelations {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		var existing store.UTXORelation
+		if err := unmarshalRaw(raw, &existing); err != nil {
+			return err
+		}
+		if existing.Type == r.Type && existing.FromRef == r.FromRef && existing.ToRef == r.ToRef {
+			return fmt.Errorf("utxo relation already exists: %s -> %s (%s)", r.FromRef, r.ToRef, r.Type)
+		}
+	}
+
+	raw, err := marshalRaw(r)
+	if err != nil {
+		return err
+	}
+	s.db.state.UTXORelations[k] = raw
+	return s.db.persistLocked()
+}
+
+func (s *utxoRelationStore) ListByFrom(tenantID string, fromRef pc.VRef) ([]*store.UTXORelation, error) {
+	prefix := tenantID + "|"
+	s.db.mu.RLock()
+	defer s.db.mu.RUnlock()
+
+	out := make([]*store.UTXORelation, 0)
+	for k, raw := range s.db.state.UTXORelations {
+		if !strings.HasPrefix(k, prefix) {
+			continue
+		}
+		var rel store.UTXORelation
+		if err := unmarshalRaw(raw, &rel); err != nil {
+			return nil, err
+		}
+		if rel.FromRef == fromRef {
+			out = append(out, &rel)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out, nil
+}
+
+func (s *utxoRelationStore) ListByTo(tenantID string, toRef pc.VRef) ([]*store.UTXORelation, error) {
+	prefix := tenantID + "|"
+	s.db.mu.RLock()
+	defer s.db.mu.RUnlock()
+
+	out := make([]*store.UTXORelation, 0)
+	for k, raw := range s.db.state.UTXORelations {
+		if !strings.HasPrefix(k, prefix) {
+			continue
+		}
+		var rel store.UTXORelation
+		if err := unmarshalRaw(raw, &rel); err != nil {
+			return nil, err
+		}
+		if rel.ToRef == toRef {
+			out = append(out, &rel)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out, nil
+}
+
+func (s *utxoRelationStore) ListByChangeUTXO(tenantID string, changeUTXORef pc.VRef) ([]*store.UTXORelation, error) {
+	prefix := tenantID + "|"
+	s.db.mu.RLock()
+	defer s.db.mu.RUnlock()
+
+	out := make([]*store.UTXORelation, 0)
+	for k, raw := range s.db.state.UTXORelations {
+		if !strings.HasPrefix(k, prefix) {
+			continue
+		}
+		var rel store.UTXORelation
+		if err := unmarshalRaw(raw, &rel); err != nil {
+			return nil, err
+		}
+		if rel.ChangeUTXORef == changeUTXORef {
+			out = append(out, &rel)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out, nil
+}
+
+func (s *utxoRelationStore) BackfillAuthorizationChain(tenantID string, fallbackActorRef pc.VRef) (int, error) {
+	prefix := strings.TrimSpace(tenantID)
+	fallback := strings.TrimSpace(string(fallbackActorRef))
+
+	s.db.mu.Lock()
+	defer s.db.mu.Unlock()
+
+	updated := 0
+	for key, raw := range s.db.state.UTXORelations {
+		if prefix != "" && !strings.HasPrefix(key, prefix+"|") {
+			continue
+		}
+
+		var rel store.UTXORelation
+		if err := unmarshalRaw(raw, &rel); err != nil {
+			return 0, err
+		}
+		changed := false
+		if strings.TrimSpace(rel.Reason) == "" {
+			rel.Reason = defaultBackfillReason()
+			changed = true
+		}
+		if rel.Payload == nil {
+			rel.Payload = map[string]interface{}{}
+		}
+
+		rawChain, hasChain := rel.Payload["authorization_chain"]
+		normalizedChain, ok := normalizeAuthorizationChain(rawChain)
+		if hasChain && ok && len(normalizedChain) > 0 {
+			if changed {
+				encoded, err := marshalRaw(&rel)
+				if err != nil {
+					return 0, err
+				}
+				s.db.state.UTXORelations[key] = encoded
+				updated++
+			}
+			continue
+		}
+
+		tenantForRef := prefix
+		if tenantForRef == "" {
+			parts := strings.SplitN(key, "|", 2)
+			if len(parts) > 0 {
+				tenantForRef = strings.TrimSpace(parts[0])
+			}
+		}
+		if tenantForRef == "" {
+			tenantForRef = strings.TrimSpace(rel.TenantID)
+		}
+
+		defaultActor := fallback
+		if defaultActor == "" {
+			defaultActor = defaultBackfillActorRef(tenantForRef)
+		}
+		rel.Payload["authorization_chain"] = []string{defaultActor}
+		changed = true
+
+		if changed {
+			encoded, err := marshalRaw(&rel)
+			if err != nil {
+				return 0, err
+			}
+			s.db.state.UTXORelations[key] = encoded
+			updated++
+		}
+	}
+
+	if updated == 0 {
+		return 0, nil
+	}
+	if err := s.db.persistLocked(); err != nil {
+		return 0, err
+	}
+	return updated, nil
+}
+
+func normalizeAuthorizationChain(raw interface{}) ([]string, bool) {
+	switch v := raw.(type) {
+	case []string:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			trimmed := strings.TrimSpace(item)
+			if trimmed == "" {
+				continue
+			}
+			out = append(out, trimmed)
+		}
+		return out, true
+	case []interface{}:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			text, ok := item.(string)
+			if !ok {
+				return nil, false
+			}
+			trimmed := strings.TrimSpace(text)
+			if trimmed == "" {
+				continue
+			}
+			out = append(out, trimmed)
+		}
+		return out, true
+	default:
+		return nil, false
+	}
+}
+
+func defaultBackfillActorRef(tenantID string) string {
+	tid := strings.TrimSpace(tenantID)
+	if tid == "" {
+		return "v://system/actor/system-backfill"
+	}
+	return fmt.Sprintf("v://%s/actor/system-backfill", tid)
+}
+
+func defaultBackfillReason() string {
+	return "legacy relation reason unavailable (auto-backfilled)"
+}
+
+func normalizeUTXORelationType(t store.UTXORelationType) (store.UTXORelationType, error) {
+	v := strings.ToUpper(strings.TrimSpace(string(t)))
+	switch store.UTXORelationType(v) {
+	case store.UTXORelationSupersedes, store.UTXORelationReassigns, store.UTXORelationSpecUpgrades:
+		return store.UTXORelationType(v), nil
+	default:
+		return "", fmt.Errorf("invalid utxo relation type: %s", t)
+	}
 }
 
 type settlementStore struct{ db *DB }

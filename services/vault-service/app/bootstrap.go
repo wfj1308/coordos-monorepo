@@ -7,14 +7,15 @@ import (
 
 // StoreSet groups all store dependencies required by vault-service.
 type StoreSet struct {
-	Projects    store.ProjectTreeStore
-	Genesis     store.GenesisStore
-	Contracts   store.ContractStore
-	Parcels     store.ParcelStore
-	UTXOs       store.UTXOStore
-	Settlements store.SettlementStore
-	Wallets     store.WalletStore
-	Audit       store.AuditStore
+	Projects      store.ProjectTreeStore
+	Genesis       store.GenesisStore
+	Contracts     store.ContractStore
+	Parcels       store.ParcelStore
+	UTXOs         store.UTXOStore
+	UTXORelations store.UTXORelationStore
+	Settlements   store.SettlementStore
+	Wallets       store.WalletStore
+	Audit         store.AuditStore
 }
 
 // BuildDeps assembles app dependencies and project-core engines with
@@ -26,16 +27,17 @@ func BuildDeps(tenantID string, s StoreSet) Deps {
 	coreAudit := pcAuditAdapter{tenantID: tenantID, s: s.Audit}
 
 	return Deps{
-		Projects:     s.Projects,
-		Genesis:      s.Genesis,
-		Contracts:    s.Contracts,
-		Parcels:      s.Parcels,
-		UTXOs:        s.UTXOs,
-		Settlements:  s.Settlements,
-		Wallets:      s.Wallets,
-		Audit:        s.Audit,
-		Rules:        rules,
-		Fission:      pc.NewFissionEngine(coreGenesis, coreAudit),
-		StateMachine: pc.NewStateMachine(coreProject, coreAudit),
+		Projects:      s.Projects,
+		Genesis:       s.Genesis,
+		Contracts:     s.Contracts,
+		Parcels:       s.Parcels,
+		UTXOs:         s.UTXOs,
+		UTXORelations: s.UTXORelations,
+		Settlements:   s.Settlements,
+		Wallets:       s.Wallets,
+		Audit:         s.Audit,
+		Rules:         rules,
+		Fission:       pc.NewFissionEngine(coreGenesis, coreAudit),
+		StateMachine:  pc.NewStateMachine(coreProject, coreAudit),
 	}
 }

@@ -1,0 +1,65 @@
+{
+  "$schema": "https://coordos.io/schemas/spu/v1",
+  "spu_ref": "v://cn.zhongbei/spu/contract/sign@v1",
+  "name": "合同签署",
+  "version": "v1",
+  "domain": "contract",
+  "stage": "CONTRACT",
+  "kind": "CERT",
+  "status": "ACTIVE",
+  "description": "合同链的关键节点。在合同审核通过后，进行正式签署并生成合同锚点UTXO。此UTXO将作为下游设计链和财务链并行的触发器。",
+  "product_unit": {
+    "deliverables": [
+      {
+        "name": "合同锚点UTXO",
+        "format": ["JSON"],
+        "required": true,
+        "completeness_check": ["contract_ref", "signed_at", "parties", "contract_hash"]
+      }
+    ]
+  },
+  "parameter_unit": {
+    "input_resource_refs": {
+      "contract_review_utxo": {
+        "label": "已审核的合同UTXO",
+        "kind": "CONTRACT_REVIEW_UTXO",
+        "required": true,
+        "status_must_be": "REVIEWED"
+      },
+      "sign_right_utxo": {
+        "label": "签字权/印章使用权UTXO",
+        "kind": "SIGN_RIGHT_UTXO",
+        "required": true,
+        "consume_mode": "REFERENCE"
+      }
+    }
+  },
+  "process_unit": {
+    "total_steps": 1,
+    "steps": [
+      {
+        "seq": 1,
+        "name": "签署合同",
+        "skill": "contract_signing",
+        "inputs": ["contract_review_utxo", "sign_right_utxo"],
+        "output_kind": "CONTRACT_ANCHOR_UTXO",
+        "auto_executable": false,
+        "note": "物理盖章或电子签名后，将合同文本哈希并创建锚点UTXO"
+      }
+    ]
+  },
+  "executor_requirement": {
+    "capability_level": "合同管理员",
+    "qualification": "ROLE_CONTRACT_ADMIN"
+  },
+  "downstream_trigger": {
+    "on_utxo_creation": "CONTRACT_ANCHOR_UTXO",
+    "action": "TRIGGER_PARALLEL_TRIPS",
+    "parallel_trips": [
+      "v://cn.zhongbei/spu/bridge/pile_foundation_drawing@v1",
+      "v://cn.zhongbei/spu/finance/invoice@v1"
+    ],
+    "description": "合同锚点UTXO一旦生成，同时激活设计流程的第一个SPU和财务流程的第一个SPU。"
+  },
+  "upstream_spu_refs": ["v://cn.zhongbei/spu/contract/review@v1"]
+}

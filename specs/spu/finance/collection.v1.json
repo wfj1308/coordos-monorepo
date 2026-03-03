@@ -1,0 +1,109 @@
+{
+  "$schema": "https://coordos.io/schemas/spu/v1",
+  "spu_ref": "v://zhongbei/spu/finance/collection@v1",
+  "name": "Collection Confirmation",
+  "version": "v1",
+  "domain": "finance",
+  "stage": "FINANCE",
+  "kind": "RECORD",
+  "status": "ACTIVE",
+  "spec_basis": ["VAT Law", "Company Finance SOP v1"],
+  "description": "收款确认SPU：核实客户款项已到账，生成收款凭证UTXO。收款确认UTXO触发分账结算。",
+  "product_unit": {
+    "deliverables": [
+      {
+        "name": "Collection confirmation record",
+        "format": ["PDF", "JSON"],
+        "required": true,
+        "completeness_check": ["bank_receipt_no", "received_amount", "received_at", "payer", "collection_account"]
+      }
+    ]
+  },
+  "parameter_unit": {
+    "input_parameters": {
+      "received_amount": { "label": "Received amount", "type": "float", "unit": "CNY", "range": [0, 10000000000] },
+      "collection_type": { "label": "Collection type", "type": "enum", "values": ["ADVANCE", "PROGRESS", "FINAL", "RETENTION"] }
+    },
+    "derived_parameters": {},
+    "input_resource_refs": {
+      "invoice_ready_utxo": {
+        "label": "Invoice ready for collection",
+        "kind": "INVOICE_READY_FOR_COLLECTION_UTXO",
+        "required": true,
+        "fields_needed": ["invoice_no", "invoice_amount", "counterparty"]
+      },
+      "bank_receipt_utxo": {
+        "label": "Bank transfer receipt",
+        "kind": "BANK_RECEIPT",
+        "required": true,
+        "fields_needed": ["bank_receipt_no", "amount", "received_at", "payer_account"]
+      }
+    }
+  },
+  "process_unit": {
+    "total_steps": 3,
+    "steps": [
+      {
+        "seq": 1,
+        "name": "Amount reconciliation",
+        "skill": "financial_reconciliation",
+        "inputs": ["invoice_ready_utxo", "bank_receipt_utxo"],
+        "output_kind": "COLLECTION_RECONCILED_UTXO",
+        "auto_executable": true,
+        "confidence_threshold": 0.98
+      },
+      {
+        "seq": 2,
+        "name": "Collection record",
+        "skill": "collection_record",
+        "inputs": ["collection_reconciled_utxo"],
+        "output_kind": "COLLECTION_RECORDED_UTXO",
+        "auto_executable": false
+      },
+      {
+        "seq": 3,
+        "name": "Trigger settlement split",
+        "skill": "settlement_split_trigger",
+        "inputs": ["collection_recorded_utxo"],
+        "output_kind": "COLLECTION_CONFIRMED_UTXO",
+        "auto_executable": true,
+        "confidence_threshold": 1.0
+      }
+    ]
+  },
+  "executor_requirement": {
+    "capability_level": "ASSISTANT_ENGINEER",
+    "required_skills": ["financial_reconciliation", "collection_record"],
+    "qualification": "ROLE_CASHIER",
+    "energy": {
+      "kind": "LABOR",
+      "base_days": 1,
+      "range_days": [1, 2]
+    },
+    "ai_executable": {
+      "full_auto_condition": "bank_api_connected=true AND amount_matches_invoice=true",
+      "assisted_condition": "partial_payment=true",
+      "human_required_condition": "amount_mismatch=true OR dispute=true"
+    }
+  },
+  "acceptance_spec": {
+    "parameter_checks": [
+      { "check": "received_amount >= 0", "spec_ref": "SOP:Collection", "blocking": true },
+      { "check": "collection_type in [ADVANCE,PROGRESS,FINAL,RETENTION]", "spec_ref": "SOP:Collection", "blocking": true }
+    ],
+    "completeness_checks": ["product_unit.deliverables ALL present"],
+    "evidence_required": [
+      { "kind": "COLLECTION_CONFIRMED_UTXO", "description": "Collection confirmation record", "blocking": true }
+    ]
+  },
+  "utxo_state_machine": {
+    "states": ["DRAFT", "REVIEWED", "APPROVED", "DELIVERABLE"],
+    "transitions": [
+      { "from": "DRAFT", "to": "REVIEWED", "condition": "evidence_required ALL present", "auto": true },
+      { "from": "REVIEWED", "to": "APPROVED", "condition": "amount_reconciled=true", "auto": true },
+      { "from": "APPROVED", "to": "DELIVERABLE", "condition": "settlement_split_triggered=true", "auto": true }
+    ]
+  },
+  "upstream_spu_refs": ["v://zhongbei/spu/finance/invoice@v1"],
+  "downstream_spu_refs": ["v://zhongbei/spu/finance/tax_return@v1"]
+}

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"coordos/vuri"
 )
 
 // ── SPU 资质要求映射表 ────────────────────────────────────────
@@ -19,7 +21,7 @@ type spuRequirement struct {
 	Description    string
 }
 
-var spuRequirements = map[string]spuRequirement{
+var spuRequirements = map[vuri.VRef]spuRequirement{
 	// 审图合格证：RULE-002 核心，必须总院注册结构师
 	"v://zhongbei/spu/bridge/review_certificate@v1": {
 		NeedCertTypes:  []CertType{CertRegStruct},
@@ -79,10 +81,10 @@ var actionRequirements = map[Action]spuRequirement{
 type Service struct {
 	store         Store
 	tenantID      int
-	headOfficeRef string // 总院的 executor_ref 前缀，用于 HeadOfficeOnly 校验
+	headOfficeRef vuri.VRef // 总院的 executor_ref 前缀，用于 HeadOfficeOnly 校验
 }
 
-func NewService(store Store, tenantID int, headOfficeRef string) *Service {
+func NewService(store Store, tenantID int, headOfficeRef vuri.VRef) *Service {
 	return &Service{
 		store:         store,
 		tenantID:      tenantID,
@@ -177,7 +179,7 @@ func (s *Service) Resolve(ctx context.Context, in ResolveInput) ([]*Candidate, e
 	}
 
 	// 如果有明确的证书要求，先按证书类型缩小范围
-	var candidateRefs []string
+	var candidateRefs []vuri.VRef
 	if len(needTypes) > 0 {
 		// 取第一个最稀缺的证书类型的持证人
 		primaryType := needTypes[0]
@@ -185,7 +187,7 @@ func (s *Service) Resolve(ctx context.Context, in ResolveInput) ([]*Candidate, e
 		if err != nil {
 			return nil, err
 		}
-		seen := map[string]bool{}
+		seen := map[vuri.VRef]bool{}
 		for _, c := range creds {
 			if !seen[c.HolderRef] {
 				seen[c.HolderRef] = true
@@ -264,7 +266,7 @@ func (s *Service) Resolve(ctx context.Context, in ResolveInput) ([]*Candidate, e
 
 // ── Occupied：查询执行体资源占用 ─────────────────────────────
 
-func (s *Service) Occupied(ctx context.Context, executorRef string) (*OccupiedState, error) {
+func (s *Service) Occupied(ctx context.Context, executorRef vuri.VRef) (*OccupiedState, error) {
 	projects, err := s.store.GetActiveProjects(ctx, executorRef)
 	if err != nil {
 		return nil, fmt.Errorf("查询占用状态失败: %w", err)
@@ -289,7 +291,7 @@ func (s *Service) Occupied(ctx context.Context, executorRef string) (*OccupiedSt
 // ── 内部工具函数 ──────────────────────────────────────────────
 
 // resolveRequirement 从 SPURef 或 Action 确定资质要求
-func (s *Service) resolveRequirement(spuRef string, action Action) spuRequirement {
+func (s *Service) resolveRequirement(spuRef vuri.VRef, action Action) spuRequirement {
 	if spuRef != "" {
 		if req, ok := spuRequirements[spuRef]; ok {
 			return req
@@ -304,8 +306,8 @@ func (s *Service) resolveRequirement(spuRef string, action Action) spuRequiremen
 }
 
 // isHeadOffice 判断执行体是否属于总院
-func (s *Service) isHeadOffice(executorRef string) bool {
-	return strings.HasPrefix(executorRef, s.headOfficeRef)
+func (s *Service) isHeadOffice(executorRef vuri.VRef) bool {
+	return vuri.IsAncestor(s.headOfficeRef, executorRef)
 }
 
 // indexCreds 把证书列表按类型建索引（同类取第一个，即有效期最远的）

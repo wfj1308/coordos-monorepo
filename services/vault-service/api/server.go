@@ -30,7 +30,9 @@ type Server struct {
 	projects        store.ProjectTreeStore
 	genesis         store.GenesisStore
 	utxos           store.UTXOStore
+	utxoRelations   store.UTXORelationStore
 	settlements     store.SettlementStore
+	audit           store.AuditStore
 	diBaseURL       string
 	httpClient      *http.Client
 	resolverSvc     *resolverpkg.Service
@@ -53,7 +55,9 @@ func NewServer(d app.Deps, jwtSecret string) *Server {
 		projects:       d.Projects,
 		genesis:        d.Genesis,
 		utxos:          d.UTXOs,
+		utxoRelations:  d.UTXORelations,
 		settlements:    d.Settlements,
+		audit:          d.Audit,
 		diBaseURL:      diBaseURL,
 		httpClient:     &http.Client{Timeout: 5 * time.Second},
 		verifyOnIngest: parseBoolEnv("VAULT_SERVICE_VERIFY_EXECUTOR_ON_INGEST", diBaseURL != "" || verifyDirect),
@@ -104,6 +108,11 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("POST /api/utxo/ingest", s.auth(s.handleUTXOIngest))
 	// UTXO query for verification and debugging.
 	s.mux.HandleFunc("GET /api/v1/utxos", s.auth(s.handleQueryUTXOs))
+	s.mux.HandleFunc("POST /api/v1/utxos/{ref}/supersede", s.auth(s.handleCreateUTXOSupersede))
+	s.mux.HandleFunc("POST /api/v1/utxos/{ref}/reassign", s.auth(s.handleCreateUTXOReassign))
+	s.mux.HandleFunc("POST /api/v1/utxos/{ref}/spec-upgrade", s.auth(s.handleCreateUTXOSpecUpgrade))
+	s.mux.HandleFunc("GET /api/v1/utxos/{ref}/relations", s.auth(s.handleQueryUTXORelations))
+	s.mux.HandleFunc("POST /api/v1/utxo-relations/backfill-evidence", s.auth(s.handleBackfillUTXORelationEvidence))
 
 	// Settlement.
 	s.mux.HandleFunc("POST /api/v1/projects/{ref}/settle", s.auth(s.handleSettle))
@@ -455,6 +464,7 @@ type utxoIngestRequest struct {
 	ProjectRef  string          `json:"project_ref"`
 	ParcelRef   string          `json:"parcel_ref"`
 	GenesisRef  string          `json:"genesis_ref"`
+	InputRefs   []string        `json:"input_refs"`
 	ExecutorRef string          `json:"executor_ref"`
 	Kind        string          `json:"kind"`
 	Status      string          `json:"status"`
@@ -473,9 +483,17 @@ func (s *Server) handleUTXOIngest(w http.ResponseWriter, r *http.Request) {
 
 	req.SPURef = strings.TrimSpace(req.SPURef)
 	req.ProjectRef = strings.TrimSpace(req.ProjectRef)
+	req.ParcelRef = strings.TrimSpace(req.ParcelRef)
+	req.GenesisRef = strings.TrimSpace(req.GenesisRef)
 	req.ExecutorRef = strings.TrimSpace(req.ExecutorRef)
+	req.PrevHash = strings.TrimSpace(req.PrevHash)
+	req.InputRefs = normalizeInputRefs(req.InputRefs)
 	if req.SPURef == "" || req.ProjectRef == "" || req.ExecutorRef == "" {
 		writeError(w, 400, "spu_ref, project_ref and executor_ref are required")
+		return
+	}
+	if err := s.validateUTXOIngestSource(actor, &req); err != nil {
+		writeError(w, 400, "invalid source lineage: "+err.Error())
 		return
 	}
 
@@ -491,14 +509,28 @@ func (s *Server) handleUTXOIngest(w http.ResponseWriter, r *http.Request) {
 		payload = map[string]interface{}{}
 	}
 
-	expectedProof := computeIngestProofHash(req.SPURef, req.ProjectRef, req.ExecutorRef, req.Payload)
+	expectedProof := computeIngestProofHashV2(
+		req.SPURef,
+		req.ProjectRef,
+		req.ExecutorRef,
+		req.GenesisRef,
+		req.PrevHash,
+		req.InputRefs,
+		req.Payload,
+	)
+	legacyProof := computeIngestProofHash(req.SPURef, req.ProjectRef, req.ExecutorRef, req.Payload)
 	req.ProofHash = strings.TrimSpace(req.ProofHash)
-	if req.ProofHash != "" && req.ProofHash != expectedProof {
+	if req.ProofHash != "" && req.ProofHash != expectedProof && req.ProofHash != legacyProof {
 		writeError(w, 400, "proof_hash mismatch")
 		return
 	}
-	if req.ProofHash == "" {
-		req.ProofHash = expectedProof
+	// Persist v2 proof hash so lineage/source fields are always bound.
+	req.ProofHash = expectedProof
+
+	status, err := normalizeIngestUTXOStatus(req.Status)
+	if err != nil {
+		writeError(w, 400, err.Error())
+		return
 	}
 
 	req.UTXORef = strings.TrimSpace(req.UTXORef)
@@ -509,9 +541,16 @@ func (s *Server) handleUTXOIngest(w http.ResponseWriter, r *http.Request) {
 	if req.Kind == "" {
 		req.Kind = req.SPURef
 	}
-	req.Status = strings.TrimSpace(req.Status)
-	if req.Status == "" {
-		req.Status = "INGESTED"
+	normalizedKind, err := pc.NormalizeUTXOKind(req.Kind)
+	if err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	req.Kind = normalizedKind
+	req.Status = status
+	inputRefs := make([]pc.VRef, 0, len(req.InputRefs))
+	for _, item := range req.InputRefs {
+		inputRefs = append(inputRefs, pc.VRef(item))
 	}
 
 	executorVerify := "skipped"
@@ -538,14 +577,15 @@ func (s *Server) handleUTXOIngest(w http.ResponseWriter, r *http.Request) {
 	u := &store.UTXO{
 		Ref:        pc.VRef(req.UTXORef),
 		ProjectRef: pc.VRef(req.ProjectRef),
-		ParcelRef:  pc.VRef(strings.TrimSpace(req.ParcelRef)),
-		GenesisRef: pc.VRef(strings.TrimSpace(req.GenesisRef)),
+		ParcelRef:  pc.VRef(req.ParcelRef),
+		GenesisRef: pc.VRef(req.GenesisRef),
+		InputRefs:  inputRefs,
 		Kind:       req.Kind,
 		Status:     req.Status,
 		TenantID:   actor.TenantID,
 		CreatedAt:  time.Now().UTC(),
 		ProofHash:  req.ProofHash,
-		PrevHash:   strings.TrimSpace(req.PrevHash),
+		PrevHash:   req.PrevHash,
 		Payload:    payload,
 	}
 	if err := s.utxos.Create(actor.TenantID, u); err != nil {
@@ -822,11 +862,458 @@ func (s *Server) handleQueryUTXOs(w http.ResponseWriter, r *http.Request) {
 	writeError(w, 400, "query one of ref / project_ref / parcel_ref is required")
 }
 
+type utxoRelationCreateRequest struct {
+	ToRef         string                 `json:"to_ref"`
+	ChangeUTXORef string                 `json:"change_utxo_ref"`
+	Reason        string                 `json:"reason"`
+	Payload       map[string]interface{} `json:"payload"`
+}
+
+type utxoRelationBackfillRequest struct {
+	FallbackActorRef string `json:"fallback_actor_ref"`
+}
+
+func (s *Server) handleCreateUTXOSupersede(w http.ResponseWriter, r *http.Request) {
+	s.handleCreateUTXORelation(w, r, store.UTXORelationSupersedes)
+}
+
+func (s *Server) handleCreateUTXOReassign(w http.ResponseWriter, r *http.Request) {
+	s.handleCreateUTXORelation(w, r, store.UTXORelationReassigns)
+}
+
+func (s *Server) handleCreateUTXOSpecUpgrade(w http.ResponseWriter, r *http.Request) {
+	s.handleCreateUTXORelation(w, r, store.UTXORelationSpecUpgrades)
+}
+
+func (s *Server) handleCreateUTXORelation(w http.ResponseWriter, r *http.Request, relationType store.UTXORelationType) {
+	actor := actorFromCtx(r)
+	fromRef := pc.VRef(strings.TrimSpace(r.PathValue("ref")))
+	if strings.TrimSpace(string(fromRef)) == "" {
+		writeError(w, 400, "path ref is required")
+		return
+	}
+
+	var req utxoRelationCreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, 400, "invalid request body: "+err.Error())
+		return
+	}
+	toRef := pc.VRef(strings.TrimSpace(req.ToRef))
+	if strings.TrimSpace(string(toRef)) == "" {
+		writeError(w, 400, "to_ref is required")
+		return
+	}
+	changeUTXORef := pc.VRef(strings.TrimSpace(req.ChangeUTXORef))
+	if strings.TrimSpace(string(changeUTXORef)) == "" {
+		writeError(w, 400, "change_utxo_ref is required")
+		return
+	}
+	if fromRef == toRef {
+		writeError(w, 400, "from_ref and to_ref must be different")
+		return
+	}
+	reason, payload, err := normalizeUTXORelationEvidence(actor.Ref, req.Reason, req.Payload)
+	if err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+
+	fromUTXO, err := s.utxos.Get(actor.TenantID, fromRef)
+	if err != nil {
+		writeError(w, statusFromErr(err), "from utxo: "+err.Error())
+		return
+	}
+	toUTXO, err := s.utxos.Get(actor.TenantID, toRef)
+	if err != nil {
+		writeError(w, statusFromErr(err), "to utxo: "+err.Error())
+		return
+	}
+	changeUTXO, err := s.utxos.Get(actor.TenantID, changeUTXORef)
+	if err != nil {
+		writeError(w, statusFromErr(err), "change utxo: "+err.Error())
+		return
+	}
+	if err := validateUTXORelationSemantics(relationType, fromUTXO, toUTXO, changeUTXO); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+
+	relation := &store.UTXORelation{
+		FromRef:       fromRef,
+		ToRef:         toRef,
+		ChangeUTXORef: changeUTXORef,
+		Type:          relationType,
+		ProjectRef:    fromUTXO.ProjectRef,
+		Reason:        reason,
+		Payload:       payload,
+		TenantID:      actor.TenantID,
+		CreatedAt:     time.Now().UTC(),
+	}
+	if err := s.utxoRelations.Create(actor.TenantID, relation); err != nil {
+		writeError(w, statusFromErr(err), err.Error())
+		return
+	}
+
+	if s.audit != nil {
+		_, _ = s.audit.RecordEvent(actor.TenantID, store.AuditEvent{
+			TenantID:   actor.TenantID,
+			ProjectRef: relation.ProjectRef,
+			ActorRef:   actor.Ref,
+			Verb:       "UTXO_RELATION_CREATE",
+			Payload: map[string]interface{}{
+				"relation_ref":    relation.Ref,
+				"type":            relation.Type,
+				"from_ref":        relation.FromRef,
+				"to_ref":          relation.ToRef,
+				"change_utxo_ref": relation.ChangeUTXORef,
+				"reason":          relation.Reason,
+			},
+			Timestamp: time.Now().UTC(),
+		})
+	}
+
+	writeJSON(w, 201, relation)
+}
+
+func (s *Server) handleQueryUTXORelations(w http.ResponseWriter, r *http.Request) {
+	actor := actorFromCtx(r)
+	ref := pc.VRef(strings.TrimSpace(r.PathValue("ref")))
+	if strings.TrimSpace(string(ref)) == "" {
+		writeError(w, 400, "path ref is required")
+		return
+	}
+	if _, err := s.utxos.Get(actor.TenantID, ref); err != nil {
+		writeError(w, statusFromErr(err), err.Error())
+		return
+	}
+	outgoing, err := s.utxoRelations.ListByFrom(actor.TenantID, ref)
+	if err != nil {
+		writeError(w, statusFromErr(err), err.Error())
+		return
+	}
+	incoming, err := s.utxoRelations.ListByTo(actor.TenantID, ref)
+	if err != nil {
+		writeError(w, statusFromErr(err), err.Error())
+		return
+	}
+	asChange, err := s.utxoRelations.ListByChangeUTXO(actor.TenantID, ref)
+	if err != nil {
+		writeError(w, statusFromErr(err), err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]interface{}{
+		"utxo_ref":        ref,
+		"outgoing":        outgoing,
+		"incoming":        incoming,
+		"as_change":       asChange,
+		"count_outgoing":  len(outgoing),
+		"count_incoming":  len(incoming),
+		"count_as_change": len(asChange),
+		"count_relations": len(outgoing) + len(incoming) + len(asChange),
+	})
+}
+
+func (s *Server) handleBackfillUTXORelationEvidence(w http.ResponseWriter, r *http.Request) {
+	actor := actorFromCtx(r)
+	if !hasRole(actor, "PLATFORM") {
+		writeError(w, 403, "platform role required")
+		return
+	}
+	if s.utxoRelations == nil {
+		writeError(w, 500, "utxo relation store is not configured")
+		return
+	}
+
+	var req utxoRelationBackfillRequest
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, 400, "invalid request body: "+err.Error())
+			return
+		}
+	}
+
+	fallbackActorRef := pc.VRef(strings.TrimSpace(req.FallbackActorRef))
+	updated, err := s.utxoRelations.BackfillAuthorizationChain(actor.TenantID, fallbackActorRef)
+	if err != nil {
+		writeError(w, statusFromErr(err), err.Error())
+		return
+	}
+
+	if s.audit != nil {
+		payload := map[string]interface{}{
+			"updated_relations": updated,
+		}
+		if strings.TrimSpace(string(fallbackActorRef)) != "" {
+			payload["fallback_actor_ref"] = fallbackActorRef
+		}
+		_, _ = s.audit.RecordEvent(actor.TenantID, store.AuditEvent{
+			TenantID:  actor.TenantID,
+			ActorRef:  actor.Ref,
+			Verb:      "UTXO_RELATION_EVIDENCE_BACKFILL",
+			Payload:   payload,
+			Timestamp: time.Now().UTC(),
+		})
+	}
+
+	writeJSON(w, 200, map[string]interface{}{
+		"tenant_id":         actor.TenantID,
+		"updated_relations": updated,
+	})
+}
+
+func normalizeUTXORelationEvidence(actorRef pc.VRef, reason string, payload map[string]interface{}) (string, map[string]interface{}, error) {
+	normalizedReason := strings.TrimSpace(reason)
+	if normalizedReason == "" {
+		return "", nil, fmt.Errorf("reason is required")
+	}
+	if len(normalizedReason) > 2048 {
+		return "", nil, fmt.Errorf("reason is too long")
+	}
+
+	out := map[string]interface{}{}
+	for k, v := range payload {
+		out[k] = v
+	}
+
+	rawChain, ok := out["authorization_chain"]
+	if !ok {
+		out["authorization_chain"] = []string{string(actorRef)}
+		return normalizedReason, out, nil
+	}
+
+	normalizedChain, err := normalizeAuthorizationChain(rawChain)
+	if err != nil {
+		return "", nil, err
+	}
+	out["authorization_chain"] = normalizedChain
+	return normalizedReason, out, nil
+}
+
+func normalizeAuthorizationChain(raw any) ([]string, error) {
+	switch v := raw.(type) {
+	case []string:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			trimmed := strings.TrimSpace(item)
+			if trimmed == "" {
+				continue
+			}
+			out = append(out, trimmed)
+		}
+		if len(out) == 0 {
+			return nil, fmt.Errorf("payload.authorization_chain must be a non-empty string array")
+		}
+		return out, nil
+	case []interface{}:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			text, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("payload.authorization_chain must be a non-empty string array")
+			}
+			trimmed := strings.TrimSpace(text)
+			if trimmed == "" {
+				continue
+			}
+			out = append(out, trimmed)
+		}
+		if len(out) == 0 {
+			return nil, fmt.Errorf("payload.authorization_chain must be a non-empty string array")
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("payload.authorization_chain must be a non-empty string array")
+	}
+}
+
+func validateUTXORelationSemantics(
+	relationType store.UTXORelationType,
+	fromUTXO, toUTXO, changeUTXO *store.UTXO,
+) error {
+	if fromUTXO == nil || toUTXO == nil || changeUTXO == nil {
+		return fmt.Errorf("utxo relation endpoints are required")
+	}
+	if !isSealedUTXOStatus(fromUTXO.Status) || !isSealedUTXOStatus(toUTXO.Status) {
+		return fmt.Errorf("both from and to utxo must be SEALED")
+	}
+	if !isSealedUTXOStatus(changeUTXO.Status) {
+		return fmt.Errorf("change_utxo_ref must be SEALED")
+	}
+	if fromUTXO.ProjectRef != toUTXO.ProjectRef {
+		return fmt.Errorf("from/to utxo must belong to same project")
+	}
+	if changeUTXO.ProjectRef != fromUTXO.ProjectRef {
+		return fmt.Errorf("change_utxo_ref must belong to same project")
+	}
+	if changeUTXO.Ref == fromUTXO.Ref || changeUTXO.Ref == toUTXO.Ref {
+		return fmt.Errorf("change_utxo_ref must be different from from_ref and to_ref")
+	}
+	if !pc.IsAllowedChangeUTXOKindForRelation(toCoreRelationType(relationType), changeUTXO.Kind) {
+		return fmt.Errorf("change_utxo_ref kind %q is invalid for %s", changeUTXO.Kind, relationType)
+	}
+
+	switch relationType {
+	case store.UTXORelationSupersedes:
+		if strings.TrimSpace(string(fromUTXO.GenesisRef)) == "" || strings.TrimSpace(string(toUTXO.GenesisRef)) == "" {
+			return fmt.Errorf("supersede requires both utxos to have genesis_ref")
+		}
+		if len(fromUTXO.InputRefs) > 0 || len(toUTXO.InputRefs) > 0 {
+			return fmt.Errorf("supersede requires both utxos to be chain roots (input_refs must be empty)")
+		}
+		if fromUTXO.GenesisRef == toUTXO.GenesisRef {
+			return fmt.Errorf("supersede requires different genesis_ref values")
+		}
+		return nil
+	case store.UTXORelationReassigns:
+		if fromUTXO.ProjectRef != toUTXO.ProjectRef {
+			return fmt.Errorf("reassign requires from/to in same project")
+		}
+		if len(toUTXO.InputRefs) != 1 || toUTXO.InputRefs[0] != fromUTXO.Ref {
+			return fmt.Errorf("reassign requires to.input_refs=[from_ref]")
+		}
+		if strings.TrimSpace(fromUTXO.ProofHash) == "" || strings.TrimSpace(toUTXO.PrevHash) == "" {
+			return fmt.Errorf("reassign requires predecessor proof linkage")
+		}
+		if strings.TrimSpace(toUTXO.PrevHash) != strings.TrimSpace(fromUTXO.ProofHash) {
+			return fmt.Errorf("reassign prev_hash must match from proof_hash")
+		}
+		return nil
+	case store.UTXORelationSpecUpgrades:
+		if fromUTXO.ProjectRef != toUTXO.ProjectRef {
+			return fmt.Errorf("spec-upgrade requires from/to in same project")
+		}
+		if len(toUTXO.InputRefs) != 1 || toUTXO.InputRefs[0] != fromUTXO.Ref {
+			return fmt.Errorf("spec-upgrade requires to.input_refs=[from_ref]")
+		}
+		if strings.TrimSpace(fromUTXO.ProofHash) == "" || strings.TrimSpace(toUTXO.PrevHash) == "" {
+			return fmt.Errorf("spec-upgrade requires predecessor proof linkage")
+		}
+		if strings.TrimSpace(toUTXO.PrevHash) != strings.TrimSpace(fromUTXO.ProofHash) {
+			return fmt.Errorf("spec-upgrade prev_hash must match from proof_hash")
+		}
+		return nil
+	default:
+		return fmt.Errorf("invalid relation type: %s", relationType)
+	}
+}
+
+func isSealedUTXOStatus(status string) bool {
+	return strings.EqualFold(strings.TrimSpace(status), "SEALED")
+}
+
+func toCoreRelationType(relationType store.UTXORelationType) pc.UTXORelationType {
+	return pc.UTXORelationType(strings.ToUpper(strings.TrimSpace(string(relationType))))
+}
+
+func (s *Server) validateUTXOIngestSource(actor app.Actor, req *utxoIngestRequest) error {
+	hasGenesis := strings.TrimSpace(req.GenesisRef) != ""
+	hasInput := len(req.InputRefs) > 0
+	if hasGenesis == hasInput {
+		return fmt.Errorf("exactly one of genesis_ref or input_refs must be provided")
+	}
+	if hasGenesis {
+		if strings.TrimSpace(req.PrevHash) != "" {
+			return fmt.Errorf("prev_hash must be empty when source is genesis_ref")
+		}
+		if _, err := s.genesis.GetFull(actor.TenantID, pc.VRef(req.GenesisRef)); err != nil {
+			return fmt.Errorf("genesis_ref not found: %w", err)
+		}
+		return nil
+	}
+	// Current architecture enforces single-parent lineage for settlement legality.
+	if len(req.InputRefs) != 1 {
+		return fmt.Errorf("input_refs must contain exactly 1 predecessor utxo_ref")
+	}
+	if strings.TrimSpace(req.PrevHash) == "" {
+		return fmt.Errorf("prev_hash is required when source is input_refs")
+	}
+	parentRef := pc.VRef(req.InputRefs[0])
+	parent, err := s.utxos.Get(actor.TenantID, parentRef)
+	if err != nil {
+		return fmt.Errorf("predecessor utxo not found: %s", parentRef)
+	}
+	if !strings.EqualFold(strings.TrimSpace(parent.Status), "SEALED") {
+		return fmt.Errorf("predecessor utxo must be SEALED: %s", parentRef)
+	}
+	if strings.TrimSpace(parent.ProofHash) == "" {
+		return fmt.Errorf("predecessor utxo has empty proof_hash: %s", parentRef)
+	}
+	if strings.TrimSpace(req.PrevHash) != strings.TrimSpace(parent.ProofHash) {
+		return fmt.Errorf("prev_hash mismatch with predecessor proof_hash")
+	}
+	return nil
+}
+
+func normalizeInputRefs(input []string) []string {
+	if len(input) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(input))
+	out := make([]string, 0, len(input))
+	for _, item := range input {
+		ref := strings.TrimSpace(item)
+		if ref == "" {
+			continue
+		}
+		if _, ok := seen[ref]; ok {
+			continue
+		}
+		seen[ref] = struct{}{}
+		out = append(out, ref)
+	}
+	return out
+}
+
+func normalizeIngestUTXOStatus(raw string) (string, error) {
+	status := strings.ToUpper(strings.TrimSpace(raw))
+	if status == "" {
+		return "SEALED", nil
+	}
+	if status == "INGESTED" {
+		return "SEALED", nil
+	}
+	allowed := map[string]bool{
+		"DRAFT":       true,
+		"REVIEWED":    true,
+		"APPROVED":    true,
+		"SEALED":      true,
+		"DELIVERABLE": true,
+	}
+	if !allowed[status] {
+		return "", fmt.Errorf("invalid status: %s", raw)
+	}
+	return status, nil
+}
+
 func computeIngestProofHash(spuRef, projectRef, executorRef string, payload []byte) string {
 	h := sha256.New()
 	h.Write([]byte(spuRef))
 	h.Write([]byte(projectRef))
 	h.Write([]byte(executorRef))
+	h.Write(payload)
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+func computeIngestProofHashV2(
+	spuRef, projectRef, executorRef, genesisRef, prevHash string,
+	inputRefs []string,
+	payload []byte,
+) string {
+	h := sha256.New()
+	h.Write([]byte(spuRef))
+	h.Write([]byte{0})
+	h.Write([]byte(projectRef))
+	h.Write([]byte{0})
+	h.Write([]byte(executorRef))
+	h.Write([]byte{0})
+	h.Write([]byte(strings.TrimSpace(genesisRef)))
+	h.Write([]byte{0})
+	h.Write([]byte(strings.TrimSpace(prevHash)))
+	h.Write([]byte{0})
+	for _, ref := range inputRefs {
+		h.Write([]byte(strings.TrimSpace(ref)))
+		h.Write([]byte{0})
+	}
 	h.Write(payload)
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
@@ -864,6 +1351,19 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 		r.Header.Set("X-Roles", strings.Join(actor.Roles, ","))
 		next(w, r)
 	}
+}
+
+func hasRole(actor app.Actor, target string) bool {
+	want := strings.ToUpper(strings.TrimSpace(target))
+	if want == "" {
+		return false
+	}
+	for _, role := range actor.Roles {
+		if strings.EqualFold(strings.TrimSpace(role), want) {
+			return true
+		}
+	}
+	return false
 }
 
 func actorFromCtx(r *http.Request) app.Actor {
@@ -989,14 +1489,18 @@ func statusFromErr(err error) int {
 	if err == nil {
 		return 200
 	}
+	msg := strings.ToLower(err.Error())
 	switch err.(type) {
 	case *app.PermissionError:
 		return 403
 	case *pc.RuleViolationError:
 		return 422
 	default:
-		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+		if strings.Contains(msg, "not found") {
 			return 404
+		}
+		if strings.Contains(msg, "already exists") || strings.Contains(msg, "duplicate") {
+			return 409
 		}
 		return 500
 	}

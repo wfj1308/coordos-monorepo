@@ -289,17 +289,25 @@ func (s *Service) SummaryByCompany(ctx context.Context, companyID int) (*QualSum
 }
 
 // CheckValidForRule002 RULE-002 校验：执行体是否持有有效审图资质
-// 审图资质要求：持有综合甲级或相关行业甲级，且在有效期内
+// 审图资质要求：
+// 1. 持有注册结构工程师(REG_STRUCT)证书
+// 2. 证书在有效期内
+// 3. 证书状态为 VALID
 func (s *Service) CheckValidForRule002(ctx context.Context, executorRef string) (bool, error) {
-	// 综合甲级满足 RULE-002
-	ok, err := s.store.CheckValid(ctx, executorRef, QualComprehensiveA)
+	ok, err := s.store.CheckValid(ctx, executorRef, QualRegStructure)
 	if err != nil {
 		return false, err
 	}
 	if ok {
 		return true, nil
 	}
-	// 行业甲级也满足
+	ok, err = s.store.CheckValid(ctx, executorRef, QualComprehensiveA)
+	if err != nil {
+		return false, err
+	}
+	if ok {
+		return true, nil
+	}
 	return s.store.CheckValid(ctx, executorRef, QualIndustryA)
 }
 
@@ -538,16 +546,38 @@ const qualColumns = `
 
 func scanQual(row *sql.Row) (*Qualification, error) {
 	q := &Qualification{}
+	var holderName sql.NullString
+	var executorRef sql.NullString
+	var issuedBy sql.NullString
+	var specialty sql.NullString
+	var level sql.NullString
+	var scope sql.NullString
+	var attachmentURL sql.NullString
+	var note sql.NullString
+	var issuedAt sql.NullTime
+	var validFrom sql.NullTime
+	var validUntil sql.NullTime
 	err := row.Scan(
-		&q.ID, &q.HolderType, &q.HolderID, &q.HolderName, &q.ExecutorRef,
-		&q.QualType, &q.CertNo, &q.IssuedBy, &q.IssuedAt,
-		&q.ValidFrom, &q.ValidUntil, &q.Status,
-		&q.Specialty, &q.Level, &q.Scope, &q.AttachmentURL, &q.Note,
+		&q.ID, &q.HolderType, &q.HolderID, &holderName, &executorRef,
+		&q.QualType, &q.CertNo, &issuedBy, &issuedAt,
+		&validFrom, &validUntil, &q.Status,
+		&specialty, &level, &scope, &attachmentURL, &note,
 		&q.TenantID, &q.CreatedAt, &q.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
 	}
+	q.HolderName = nullString(holderName)
+	q.ExecutorRef = nullString(executorRef)
+	q.IssuedBy = nullString(issuedBy)
+	q.Specialty = nullString(specialty)
+	q.Level = nullString(level)
+	q.Scope = nullString(scope)
+	q.AttachmentURL = nullString(attachmentURL)
+	q.Note = nullString(note)
+	q.IssuedAt = nullTimePtr(issuedAt)
+	q.ValidFrom = nullTimePtr(validFrom)
+	q.ValidUntil = nullTimePtr(validUntil)
 	return q, nil
 }
 
@@ -555,15 +585,52 @@ func scanQuals(rows *sql.Rows) []*Qualification {
 	var list []*Qualification
 	for rows.Next() {
 		q := &Qualification{}
+		var holderName sql.NullString
+		var executorRef sql.NullString
+		var issuedBy sql.NullString
+		var specialty sql.NullString
+		var level sql.NullString
+		var scope sql.NullString
+		var attachmentURL sql.NullString
+		var note sql.NullString
+		var issuedAt sql.NullTime
+		var validFrom sql.NullTime
+		var validUntil sql.NullTime
 		if err := rows.Scan(
-			&q.ID, &q.HolderType, &q.HolderID, &q.HolderName, &q.ExecutorRef,
-			&q.QualType, &q.CertNo, &q.IssuedBy, &q.IssuedAt,
-			&q.ValidFrom, &q.ValidUntil, &q.Status,
-			&q.Specialty, &q.Level, &q.Scope, &q.AttachmentURL, &q.Note,
+			&q.ID, &q.HolderType, &q.HolderID, &holderName, &executorRef,
+			&q.QualType, &q.CertNo, &issuedBy, &issuedAt,
+			&validFrom, &validUntil, &q.Status,
+			&specialty, &level, &scope, &attachmentURL, &note,
 			&q.TenantID, &q.CreatedAt, &q.UpdatedAt,
 		); err == nil {
+			q.HolderName = nullString(holderName)
+			q.ExecutorRef = nullString(executorRef)
+			q.IssuedBy = nullString(issuedBy)
+			q.Specialty = nullString(specialty)
+			q.Level = nullString(level)
+			q.Scope = nullString(scope)
+			q.AttachmentURL = nullString(attachmentURL)
+			q.Note = nullString(note)
+			q.IssuedAt = nullTimePtr(issuedAt)
+			q.ValidFrom = nullTimePtr(validFrom)
+			q.ValidUntil = nullTimePtr(validUntil)
 			list = append(list, q)
 		}
 	}
 	return list
+}
+
+func nullString(v sql.NullString) string {
+	if !v.Valid {
+		return ""
+	}
+	return v.String
+}
+
+func nullTimePtr(v sql.NullTime) *time.Time {
+	if !v.Valid {
+		return nil
+	}
+	t := v.Time
+	return &t
 }

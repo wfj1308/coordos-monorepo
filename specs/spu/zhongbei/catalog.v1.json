@@ -1,0 +1,358 @@
+{
+  "$schema": "https://coordos.io/schemas/spu-catalog/v1",
+  "catalog_ref": "v://cn.zhongbei/spu/catalog@v1",
+  "name": "Zhongbei Multi-Trip SPU Catalog",
+  "domain": "enterprise_flow",
+  "version": "v1",
+  "description": "Company-level trip chain catalog: BIDDING -> CONTRACT -> DESIGN -> DELIVERY -> FINANCE. Three main chains connect end-to-end: bid chain output triggers project genesis; design chain output triggers finance chain; finance chain completes settlement.",
+  "trip_chains": [
+    {
+      "trip": "BIDDING",
+      "description": "From bid preparation to award confirmation. Entry executor: ROLE_BID_SPECIALIST / ROLE_MARKET_MANAGER. Exit UTXO (BID_AWARD_UTXO) triggers project genesis and hands off to CONTRACT trip.",
+      "entry_spu_ref": "v://cn.zhongbei/spu/bid/preparation@v1",
+      "exit_spu_ref": "v://cn.zhongbei/spu/bid/award@v1",
+      "chain_trigger": {
+        "on_exit_utxo": "BID_AWARD_UTXO",
+        "triggers": ["v://cn.zhongbei/spu/contract/review@v1"],
+        "note": "中标通知书UTXO封印后自动触发合同审核Trip"
+      }
+    },
+    {
+      "trip": "CONTRACT",
+      "description": "Contract review, signing, and archiving. Entry executor: ROLE_CONTRACT_ADMIN / ROLE_DOC_CONTROLLER. Exit UTXO (CONTRACT_ANCHOR_UTXO) simultaneously triggers DESIGN trip and FINANCE trip.",
+      "entry_spu_ref": "v://cn.zhongbei/spu/contract/review@v1",
+      "exit_spu_ref": "v://cn.zhongbei/spu/contract/sign@v1",
+      "chain_trigger": {
+        "on_exit_utxo": "CONTRACT_ANCHOR_UTXO",
+        "triggers": [
+          "v://cn.zhongbei/spu/bridge/pile_foundation_drawing@v1",
+          "v://cn.zhongbei/spu/finance/invoice@v1"
+        ],
+        "parallel": true,
+        "note": "合同签署UTXO同时触发设计链和财务链（可并行推进）"
+      }
+    },
+    {
+      "trip": "DESIGN",
+      "description": "Bridge delivery closure chain. Entry executor: REG_STRUCTURE (注册结构工程师). Exit UTXO (REVIEW_CERT_UTXO) is a RULE-002 gating condition for settlement_cert.",
+      "entry_spu_ref": "v://cn.zhongbei/spu/bridge/pile_foundation_drawing@v1",
+      "exit_spu_ref": "v://cn.zhongbei/spu/bridge/review_certificate@v1",
+      "chain_trigger": {
+        "on_exit_utxo": "REVIEW_CERT_UTXO",
+        "triggers": ["v://cn.zhongbei/spu/bridge/settlement_cert@v1"],
+        "note": "审图合格证是settlement_cert的RULE-002必要条件之一"
+      }
+    },
+    {
+      "trip": "FINANCE",
+      "description": "Invoice, collection, tax filing, and settlement closure. Entry executor: ROLE_ACCOUNTANT. Exit UTXO (TAX_RETURN_CERT_UTXO) is a prerequisite for settlement_cert along with design chain output.",
+      "entry_spu_ref": "v://cn.zhongbei/spu/finance/invoice@v1",
+      "exit_spu_ref": "v://cn.zhongbei/spu/bridge/settlement_cert@v1",
+      "chain_trigger": {
+        "on_exit_utxo": "SETTLEMENT_CERT_UTXO",
+        "triggers": [],
+        "note": "结算凭证是整条企业UTXO链的终态，触发钱包分账到账，项目归档"
+      }
+    }
+  ],
+  "closure_chain": [
+    {
+      "seq": 1,
+      "spu_ref": "v://cn.zhongbei/spu/bid/preparation@v1",
+      "name": "Bid Preparation",
+      "kind": "RECORD",
+      "stage": "BIDDING",
+      "blocking_for_next": true,
+      "required_qualifications": ["ROLE_BID_SPECIALIST"],
+      "executor_role": {
+        "code": "ROLE_BID_SPECIALIST",
+        "trip_identity": "执行体",
+        "resources_consumed": ["client_requirement_utxo", "qualification_snapshot_utxo", "achievement_profile_utxo"],
+        "utxo_produced": "BID_PREPARED_UTXO"
+      }
+    },
+    {
+      "seq": 2,
+      "spu_ref": "v://cn.zhongbei/spu/bid/submission@v1",
+      "name": "Bid Submission",
+      "kind": "RECORD",
+      "stage": "BIDDING",
+      "blocking_for_next": true,
+      "required_qualifications": ["ROLE_MARKET_MANAGER"],
+      "executor_role": {
+        "code": "ROLE_MARKET_MANAGER",
+        "trip_identity": "执行体",
+        "resources_consumed": ["bid_prepared_utxo", "authorization_utxo"],
+        "utxo_produced": "BID_SUBMITTED_UTXO"
+      }
+    },
+    {
+      "seq": 3,
+      "spu_ref": "v://cn.zhongbei/spu/bid/award@v1",
+      "name": "Bid Award Confirmation",
+      "kind": "CERT",
+      "stage": "BIDDING",
+      "blocking_for_next": true,
+      "required_qualifications": ["ROLE_MARKET_MANAGER"],
+      "executor_role": {
+        "code": "ROLE_MARKET_MANAGER",
+        "trip_identity": "执行体",
+        "resources_consumed": ["bid_submitted_utxo", "award_notice_utxo"],
+        "utxo_produced": "BID_AWARD_UTXO",
+        "downstream_trigger": "v://cn.zhongbei/spu/contract/review@v1"
+      }
+    },
+    {
+      "seq": 4,
+      "spu_ref": "v://cn.zhongbei/spu/contract/review@v1",
+      "name": "Contract Review",
+      "kind": "RECORD",
+      "stage": "CONTRACT",
+      "blocking_for_next": true,
+      "required_qualifications": ["ROLE_CONTRACT_ADMIN"],
+      "executor_role": {
+        "code": "ROLE_CONTRACT_ADMIN",
+        "trip_identity": "执行体",
+        "resources_consumed": ["bid_award_utxo", "contract_draft_utxo"],
+        "utxo_produced": "CONTRACT_REVIEW_READY_UTXO"
+      }
+    },
+    {
+      "seq": 5,
+      "spu_ref": "v://cn.zhongbei/spu/contract/sign@v1",
+      "name": "Contract Sign",
+      "kind": "CERT",
+      "stage": "CONTRACT",
+      "blocking_for_next": true,
+      "required_qualifications": ["ROLE_CONTRACT_ADMIN"],
+      "executor_role": {
+        "code": "ROLE_CONTRACT_ADMIN",
+        "trip_identity": "执行体",
+        "resources_consumed": ["contract_review_ready_utxo", "sign_right_utxo"],
+        "utxo_produced": "CONTRACT_ANCHOR_UTXO",
+        "downstream_trigger_parallel": [
+          "v://cn.zhongbei/spu/bridge/pile_foundation_drawing@v1",
+          "v://cn.zhongbei/spu/finance/invoice@v1",
+          "v://cn.zhongbei/spu/contract/archive@v1"
+        ]
+      }
+    },
+    {
+      "seq": 6,
+      "spu_ref": "v://cn.zhongbei/spu/bridge/pile_foundation_drawing@v1",
+      "name": "Pile Foundation Drawing",
+      "kind": "DRAWING",
+      "stage": "DESIGN",
+      "blocking_for_next": true,
+      "required_qualifications": ["REG_STRUCTURE"],
+      "executor_role": {
+        "code": "REG_STRUCTURE",
+        "trip_identity": "执行体",
+        "resources_consumed": ["contract_anchor_utxo", "geology_report_utxo"],
+        "utxo_produced": "PILE_FOUNDATION_DRAWING_UTXO"
+      }
+    },
+    {
+      "seq": 7,
+      "spu_ref": "v://cn.zhongbei/spu/bridge/pile_cap_drawing@v1",
+      "name": "Pile Cap Drawing",
+      "kind": "DRAWING",
+      "stage": "DESIGN",
+      "blocking_for_next": true,
+      "required_qualifications": ["REG_STRUCTURE"],
+      "executor_role": {
+        "code": "REG_STRUCTURE",
+        "trip_identity": "执行体",
+        "resources_consumed": ["pile_foundation_drawing_utxo"],
+        "utxo_produced": "PILE_CAP_DRAWING_UTXO"
+      }
+    },
+    {
+      "seq": 8,
+      "spu_ref": "v://cn.zhongbei/spu/bridge/pier_rebar_drawing@v1",
+      "name": "Pier Rebar Drawing",
+      "kind": "DRAWING",
+      "stage": "DESIGN",
+      "blocking_for_next": true,
+      "required_qualifications": ["REG_STRUCTURE"],
+      "executor_role": {
+        "code": "REG_STRUCTURE",
+        "trip_identity": "执行体",
+        "resources_consumed": ["pile_cap_drawing_utxo"],
+        "utxo_produced": "PIER_REBAR_DRAWING_UTXO"
+      }
+    },
+    {
+      "seq": 9,
+      "spu_ref": "v://cn.zhongbei/spu/bridge/superstructure_drawing@v1",
+      "name": "Superstructure Drawing",
+      "kind": "DRAWING",
+      "stage": "DESIGN",
+      "blocking_for_next": true,
+      "required_qualifications": ["REG_STRUCTURE"],
+      "executor_role": {
+        "code": "REG_STRUCTURE",
+        "trip_identity": "执行体",
+        "resources_consumed": ["pier_rebar_drawing_utxo"],
+        "utxo_produced": "SUPERSTRUCTURE_DRAWING_UTXO"
+      }
+    },
+    {
+      "seq": 10,
+      "spu_ref": "v://cn.zhongbei/spu/bridge/concealed_acceptance@v1",
+      "name": "Concealed Acceptance Record",
+      "kind": "RECORD",
+      "stage": "DELIVERY",
+      "blocking_for_next": true,
+      "executor_role": {
+        "trip_identity": "执行体（三方签字：设计方+监理方+施工方）",
+        "resources_consumed": ["superstructure_drawing_utxo"],
+        "utxo_produced": "CONCEALED_ACCEPTANCE_UTXO"
+      }
+    },
+    {
+      "seq": 11,
+      "spu_ref": "v://cn.zhongbei/spu/bridge/prestress_record@v1",
+      "name": "Prestress Record",
+      "kind": "RECORD",
+      "stage": "DELIVERY",
+      "blocking_for_next": true,
+      "executor_role": {
+        "trip_identity": "执行体（IoT传感器+人工确认）",
+        "resources_consumed": ["superstructure_drawing_utxo"],
+        "utxo_produced": "PRESTRESS_RECORD_UTXO"
+      }
+    },
+    {
+      "seq": 12,
+      "spu_ref": "v://cn.zhongbei/spu/bridge/concrete_strength_report@v1",
+      "name": "Concrete Strength Report",
+      "kind": "REPORT",
+      "stage": "DELIVERY",
+      "blocking_for_next": true,
+      "executor_role": {
+        "trip_identity": "执行体（第三方检测机构）",
+        "resources_consumed": ["concealed_acceptance_utxo", "prestress_record_utxo"],
+        "utxo_produced": "CONCRETE_REPORT_UTXO"
+      }
+    },
+    {
+      "seq": 13,
+      "spu_ref": "v://cn.zhongbei/spu/bridge/coordinate_proof@v1",
+      "name": "Coordinate Proof",
+      "kind": "PROVE",
+      "stage": "DELIVERY",
+      "blocking_for_next": true,
+      "executor_role": {
+        "trip_identity": "执行体（测量工程师+全站仪）",
+        "resources_consumed": ["concrete_report_utxo"],
+        "utxo_produced": "COORDINATE_PROOF_UTXO"
+      }
+    },
+    {
+      "seq": 14,
+      "spu_ref": "v://cn.zhongbei/spu/bridge/review_certificate@v1",
+      "name": "Review Certificate",
+      "kind": "CERT",
+      "stage": "DELIVERY",
+      "blocking_for_next": true,
+      "required_qualifications": ["REG_STRUCTURE"],
+      "executor_role": {
+        "code": "REG_STRUCTURE",
+        "trip_identity": "执行体（总院注册工程师+总工程师，RULE-002）",
+        "resources_consumed": ["coordinate_proof_utxo", "all_drawing_utxos"],
+        "utxo_produced": "REVIEW_CERT_UTXO"
+      }
+    },
+    {
+      "seq": 15,
+      "spu_ref": "v://cn.zhongbei/spu/contract/archive@v1",
+      "name": "Contract Archive",
+      "kind": "RECORD",
+      "stage": "CONTRACT",
+      "blocking_for_next": false,
+      "required_qualifications": ["ROLE_DOC_CONTROLLER"],
+      "executor_role": {
+        "code": "ROLE_DOC_CONTROLLER",
+        "trip_identity": "执行体",
+        "resources_consumed": ["contract_signed_utxo"],
+        "utxo_produced": "CONTRACT_ARCHIVED_UTXO"
+      }
+    },
+    {
+      "seq": 16,
+      "spu_ref": "v://cn.zhongbei/spu/finance/invoice@v1",
+      "name": "Invoice Issue",
+      "kind": "CERT",
+      "stage": "FINANCE",
+      "blocking_for_next": true,
+      "required_qualifications": ["ROLE_ACCOUNTANT"],
+      "executor_role": {
+        "code": "ROLE_ACCOUNTANT",
+        "trip_identity": "执行体",
+        "resources_consumed": ["contract_anchor_utxo", "invoice_right_utxo"],
+        "utxo_produced": "INVOICE_READY_FOR_COLLECTION_UTXO"
+      }
+    },
+    {
+      "seq": 17,
+      "spu_ref": "v://cn.zhongbei/spu/finance/collection@v1",
+      "name": "Collection Confirmation",
+      "kind": "RECORD",
+      "stage": "FINANCE",
+      "blocking_for_next": true,
+      "required_qualifications": ["ROLE_CASHIER"],
+      "executor_role": {
+        "code": "ROLE_CASHIER",
+        "trip_identity": "执行体",
+        "resources_consumed": ["invoice_ready_utxo", "bank_receipt_utxo"],
+        "utxo_produced": "COLLECTION_CONFIRMED_UTXO"
+      }
+    },
+    {
+      "seq": 18,
+      "spu_ref": "v://cn.zhongbei/spu/finance/tax_return@v1",
+      "name": "Tax Return Filing",
+      "kind": "CERT",
+      "stage": "FINANCE",
+      "blocking_for_next": true,
+      "required_qualifications": ["ROLE_TAX_FILER"],
+      "executor_role": {
+        "code": "ROLE_TAX_FILER",
+        "trip_identity": "执行体",
+        "resources_consumed": ["collection_confirmed_utxo", "invoice_issued_utxo"],
+        "utxo_produced": "TAX_RETURN_CERT_UTXO"
+      }
+    },
+    {
+      "seq": 19,
+      "spu_ref": "v://cn.zhongbei/spu/bridge/settlement_cert@v1",
+      "name": "Settlement Certificate",
+      "kind": "CERT",
+      "stage": "FINANCE",
+      "blocking_for_next": false,
+      "executor_role": {
+        "trip_identity": "执行体（平台结算引擎，全自动，双方确认后不可撤销）",
+        "resources_consumed": [
+          "review_cert_utxo",
+          "coordinate_proof_utxo",
+          "concrete_report_utxo",
+          "contract_ref",
+          "all_drawing_utxos"
+        ],
+        "utxo_produced": "SETTLEMENT_CERT_UTXO",
+        "note": "终态SPU：触发钱包分账，RULE-002+RULE-003+RULE-005全部校验"
+      }
+    }
+  ],
+  "role_to_chain_map": {
+    "ROLE_BID_SPECIALIST":   { "chain": "BIDDING",  "trip_identity": "执行体", "spu_refs": ["bid/preparation@v1", "bid/submission@v1"] },
+    "ROLE_MARKET_MANAGER":   { "chain": "BIDDING",  "trip_identity": "执行体", "spu_refs": ["bid/preparation@v1", "bid/submission@v1", "bid/award@v1"] },
+    "ROLE_CONTRACT_ADMIN":   { "chain": "CONTRACT", "trip_identity": "执行体", "spu_refs": ["contract/review@v1", "contract/sign@v1", "contract/archive@v1"] },
+    "ROLE_DOC_CONTROLLER":   { "chain": "CONTRACT", "trip_identity": "执行体", "spu_refs": ["contract/archive@v1"] },
+    "REG_STRUCTURE":         { "chain": "DESIGN",   "trip_identity": "执行体", "spu_refs": ["bridge/pile_foundation_drawing@v1", "bridge/pile_cap_drawing@v1", "bridge/pier_rebar_drawing@v1", "bridge/superstructure_drawing@v1", "bridge/review_certificate@v1"] },
+    "ROLE_ACCOUNTANT":       { "chain": "FINANCE",  "trip_identity": "执行体", "spu_refs": ["finance/invoice@v1", "finance/collection@v1"] },
+    "ROLE_CASHIER":          { "chain": "FINANCE",  "trip_identity": "执行体", "spu_refs": ["finance/collection@v1"] },
+    "ROLE_TAX_FILER":        { "chain": "FINANCE",  "trip_identity": "执行体", "spu_refs": ["finance/invoice@v1", "finance/collection@v1", "finance/tax_return@v1"] }
+  }
+}

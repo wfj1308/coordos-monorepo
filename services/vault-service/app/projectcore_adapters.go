@@ -225,6 +225,103 @@ func (a pcContractAdapter) ValidatePayment(contractRef pc.VRef, amount int64) er
 	return a.s.ValidatePayment(a.tenantID, contractRef, amount)
 }
 
+type pcUTXOAdapter struct {
+	tenantID string
+	s        store.UTXOStore
+}
+
+func (a pcUTXOAdapter) Get(ref pc.VRef) (*pc.UTXORecord, error) {
+	u, err := a.s.Get(a.tenantID, ref)
+	if err != nil {
+		return nil, err
+	}
+	if u == nil {
+		return nil, fmt.Errorf("utxo not found: %s", ref)
+	}
+	return mapStoreUTXOToCore(u), nil
+}
+
+func (a pcUTXOAdapter) ListByProject(projectRef pc.VRef) ([]*pc.UTXORecord, error) {
+	items, err := a.s.ListByProject(a.tenantID, projectRef)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*pc.UTXORecord, 0, len(items))
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		out = append(out, mapStoreUTXOToCore(item))
+	}
+	return out, nil
+}
+
+func mapStoreUTXOToCore(u *store.UTXO) *pc.UTXORecord {
+	inputRefs := make([]pc.VRef, 0, len(u.InputRefs))
+	inputRefs = append(inputRefs, u.InputRefs...)
+	return &pc.UTXORecord{
+		Ref:        u.Ref,
+		ProjectRef: u.ProjectRef,
+		GenesisRef: u.GenesisRef,
+		InputRefs:  inputRefs,
+		Kind:       u.Kind,
+		PrevHash:   u.PrevHash,
+		ProofHash:  u.ProofHash,
+		Status:     u.Status,
+	}
+}
+
+type pcUTXORelationAdapter struct {
+	tenantID string
+	s        store.UTXORelationStore
+}
+
+func (a pcUTXORelationAdapter) ListByFrom(ref pc.VRef) ([]*pc.UTXORelationRecord, error) {
+	items, err := a.s.ListByFrom(a.tenantID, ref)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*pc.UTXORelationRecord, 0, len(items))
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		out = append(out, mapStoreUTXORelationToCore(item))
+	}
+	return out, nil
+}
+
+func (a pcUTXORelationAdapter) ListByTo(ref pc.VRef) ([]*pc.UTXORelationRecord, error) {
+	items, err := a.s.ListByTo(a.tenantID, ref)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*pc.UTXORelationRecord, 0, len(items))
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		out = append(out, mapStoreUTXORelationToCore(item))
+	}
+	return out, nil
+}
+
+func mapStoreUTXORelationToCore(r *store.UTXORelation) *pc.UTXORelationRecord {
+	metadata := map[string]interface{}{}
+	for k, v := range r.Payload {
+		metadata[k] = v
+	}
+	return &pc.UTXORelationRecord{
+		Ref:           r.Ref,
+		FromRef:       r.FromRef,
+		ToRef:         r.ToRef,
+		ChangeUTXORef: r.ChangeUTXORef,
+		Type:          pc.UTXORelationType(r.Type),
+		Reason:        r.Reason,
+		Metadata:      metadata,
+	}
+}
+
 type pcAuditAdapter struct {
 	tenantID string
 	s        store.AuditStore

@@ -1,6 +1,6 @@
 {
   "$schema": "https://coordos.io/schemas/spu/v1",
-  "spu_ref": "v://zhongbei/spu/bridge/coordinate_proof@v1",
+  "spu_ref": "v://cn.zhongbei/spu/bridge/coordinate_proof@v1",
   "name": "实测坐标证明",
   "version": "v1",
   "domain": "bridge",
@@ -126,6 +126,6 @@
 
   "dispute_prc_value": "桥墩位置偏差是最常见的竣工验收争议。此UTXO保存原始测量数据+控制点复测+偏差计算全链，任何事后争议可完整还原当时测量现场。",
 
-  "upstream_spu_refs":["v://zhongbei/spu/bridge/concrete_strength_report@v1"],
-  "downstream_spu_refs":["v://zhongbei/spu/bridge/review_certificate@v1"]
+  "upstream_spu_refs":["v://cn.zhongbei/spu/bridge/concrete_strength_report@v1"],
+  "downstream_spu_refs":["v://cn.zhongbei/spu/bridge/review_certificate@v1"]
 }

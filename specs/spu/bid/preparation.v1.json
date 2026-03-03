@@ -1,0 +1,102 @@
+{
+  "$schema": "https://coordos.io/schemas/spu/v1",
+  "spu_ref": "v://cn.zhongbei/spu/bid/preparation@v1",
+  "name": "标书准备",
+  "version": "v1",
+  "domain": "bid",
+  "stage": "BIDDING",
+  "kind": "RECORD",
+  "status": "ACTIVE",
+  "description": "投标链的起点。根据招标要求，从企业的资质池、人员池、业绩池中匹配并锁定资源，生成一份包含所有资源proof_hash的、可验证的投标文件UTXO。",
+  "product_unit": {
+    "deliverables": [
+      {
+        "name": "投标文件UTXO",
+        "format": ["JSON"],
+        "required": true,
+        "completeness_check": ["bid_doc_ref", "project_name", "tenderer", "referenced_resources_hash"]
+      }
+    ]
+  },
+  "parameter_unit": {
+    "input_parameters": {
+      "project_name": { "label": "项目名称", "type": "string", "required": true },
+      "tender_ref": { "label": "招标公告引用", "type": "string" }
+    },
+    "input_resource_refs": {
+      "required_qualifications": {
+        "label": "企业资质要求",
+        "kind": "QUALIFICATION_GENESIS_UTXO",
+        "required": true,
+        "consume_mode": "REFERENCE",
+        "note": "软消耗（引用型），验证资质是否有效、范围是否覆盖"
+      },
+      "required_engineers": {
+        "label": "注册工程师要求",
+        "kind": "EXECUTOR_QUALIFICATION_UTXO",
+        "required": true,
+        "consume_mode": "REFERENCE",
+        "note": "软消耗（引用型），验证工程师是否可用（occupied < max_concurrent）。中标后转为硬消耗（OCCUPY）"
+      },
+      "required_achievements": {
+        "label": "同类业绩要求",
+        "kind": "ACHIEVEMENT_UTXO",
+        "required": false,
+        "consume_mode": "REFERENCE",
+        "note": "软消耗（引用型），从achievement_pool视图中按类型和年份检索"
+      }
+    }
+  },
+  "process_unit": {
+    "total_steps": 3,
+    "steps": [
+      {
+        "seq": 1,
+        "name": "资源校验 (ValidateBid)",
+        "skill": "bid_validation",
+        "inputs": ["required_qualifications", "required_engineers", "required_achievements"],
+        "output_kind": "BID_VALIDATION_UTXO",
+        "auto_executable": true,
+        "note": "调用/api/v1/bid/validate，检查资源池是否满足招标要求"
+      },
+      {
+        "seq": 2,
+        "name": "创建标书 (CreateBid)",
+        "skill": "bid_creation",
+        "inputs": ["bid_validation_utxo"],
+        "output_kind": "BID_DOCUMENT_UTXO",
+        "auto_executable": false,
+        "note": "调用/api/v1/bid，创建bid_documents记录，状态为DRAFT，并记录引用的所有资源"
+      },
+      {
+        "seq": 3,
+        "name": "提交标书 (SubmitBid)",
+        "skill": "bid_submission",
+        "inputs": ["bid_document_utxo"],
+        "output_kind": "BID_DOCUMENT_UTXO",
+        "auto_executable": false,
+        "note": "调用/api/v1/bid/{id}/submit，将状态更新为SUBMITTED"
+      }
+    ]
+  },
+  "executor_requirement": {
+    "capability_level": "投标专员",
+    "required_skills": ["bid_validation", "bid_creation", "bid_submission"],
+    "qualification": "ROLE_BID_SPECIALIST",
+    "energy": { "kind": "LABOR", "base_days": 2, "range_days": [1, 5] }
+  },
+  "acceptance_spec": {
+    "evidence_required": [
+      { "kind": "BID_VALIDATION_UTXO", "description": "资源校验通过证明", "blocking": true },
+      { "kind": "BID_DOCUMENT_UTXO", "description": "标书主体，状态为SUBMITTED", "blocking": true }
+    ]
+  },
+  "utxo_state_machine": {
+    "states": ["DRAFT", "VALIDATED", "SUBMITTED"],
+    "transitions": [
+      { "from": "DRAFT", "to": "VALIDATED", "condition": "ValidateBid API returns success" },
+      { "from": "VALIDATED", "to": "SUBMITTED", "condition": "SubmitBid API call" }
+    ]
+  },
+  "downstream_spu_refs": ["v://cn.zhongbei/spu/bid/award@v1"]
+}

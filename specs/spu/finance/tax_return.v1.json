@@ -1,0 +1,126 @@
+{
+  "$schema": "https://coordos.io/schemas/spu/v1",
+  "spu_ref": "v://cn.zhongbei/spu/finance/tax_return@v1",
+  "name": "Tax Return Filing",
+  "version": "v1",
+  "domain": "finance",
+  "stage": "FINANCE",
+  "kind": "CERT",
+  "status": "ACTIVE",
+  "spec_basis": ["VAT Law", "Corporate Income Tax Law", "Company Finance SOP v1"],
+  "description": "税务申报SPU：依据收款凭证完成增值税及相关税种申报，产出完税凭证UTXO。完税凭证是财务链的终态产出，触发下游settlement_cert。",
+  "product_unit": {
+    "deliverables": [
+      {
+        "name": "Tax filing receipt",
+        "format": ["PDF", "XML"],
+        "required": true,
+        "completeness_check": ["tax_return_no", "tax_period", "declared_amount", "tax_amount", "filed_at", "tax_bureau_stamp"]
+      },
+      {
+        "name": "Tax payment certificate",
+        "format": ["PDF"],
+        "required": true,
+        "completeness_check": ["payment_no", "tax_amount", "paid_at", "tax_bureau_ref"]
+      }
+    ]
+  },
+  "parameter_unit": {
+    "input_parameters": {
+      "tax_period": { "label": "Tax period", "type": "string", "note": "e.g. 2026-02" },
+      "declared_revenue": { "label": "Declared revenue", "type": "float", "unit": "CNY", "range": [0, 10000000000] },
+      "vat_rate": { "label": "VAT rate", "type": "float", "unit": "%", "range": [0, 100] },
+      "tax_type": { "label": "Tax type", "type": "enum", "values": ["VAT_GENERAL", "VAT_SMALL", "CORPORATE_INCOME", "WITHHOLDING"] }
+    },
+    "derived_parameters": {
+      "vat_amount": {
+        "label": "VAT payable",
+        "type": "float",
+        "unit": "CNY",
+        "formula": "declared_revenue * vat_rate / (1 + vat_rate)"
+      }
+    },
+    "input_resource_refs": {
+      "collection_confirmed_utxo": {
+        "label": "Collection confirmation record",
+        "kind": "COLLECTION_CONFIRMED_UTXO",
+        "required": true,
+        "fields_needed": ["received_amount", "received_at", "invoice_no", "bank_receipt_no"]
+      },
+      "invoice_issued_utxo": {
+        "label": "Issued invoice",
+        "kind": "INVOICE_ISSUED_UTXO",
+        "required": true,
+        "fields_needed": ["invoice_no", "invoice_code", "tax_amount", "tax_rate"]
+      }
+    }
+  },
+  "process_unit": {
+    "total_steps": 3,
+    "steps": [
+      {
+        "seq": 1,
+        "name": "Tax calculation",
+        "skill": "tax_compliance",
+        "inputs": ["collection_confirmed_utxo", "invoice_issued_utxo"],
+        "output_kind": "TAX_CALC_UTXO",
+        "auto_executable": true,
+        "confidence_threshold": 0.95
+      },
+      {
+        "seq": 2,
+        "name": "File tax return",
+        "skill": "tax_filing",
+        "inputs": ["tax_calc_utxo"],
+        "output_kind": "TAX_FILED_UTXO",
+        "auto_executable": false,
+        "note": "Must be executed by authorized ROLE_TAX_FILER; electronic tax bureau submission"
+      },
+      {
+        "seq": 3,
+        "name": "Attach payment certificate",
+        "skill": "tax_payment_confirm",
+        "inputs": ["tax_filed_utxo"],
+        "output_kind": "TAX_RETURN_CERT_UTXO",
+        "auto_executable": true,
+        "confidence_threshold": 1.0
+      }
+    ]
+  },
+  "executor_requirement": {
+    "capability_level": "ASSISTANT_ENGINEER",
+    "required_skills": ["tax_compliance", "tax_filing", "tax_payment_confirm"],
+    "qualification": "ROLE_TAX_FILER",
+    "energy": {
+      "kind": "LABOR",
+      "base_days": 1,
+      "range_days": [1, 3]
+    },
+    "ai_executable": {
+      "full_auto_condition": "tax_bureau_api_connected=true AND amount_standard=true",
+      "assisted_condition": "complex_deductions=true",
+      "human_required_condition": "tax_audit_required=true OR manual_adjustment=true"
+    }
+  },
+  "acceptance_spec": {
+    "parameter_checks": [
+      { "check": "declared_revenue >= 0", "spec_ref": "SOP:TaxReturn", "blocking": true },
+      { "check": "vat_rate >= 0 AND vat_rate <= 100", "spec_ref": "SOP:TaxReturn", "blocking": true },
+      { "check": "tax_type in [VAT_GENERAL,VAT_SMALL,CORPORATE_INCOME,WITHHOLDING]", "spec_ref": "SOP:TaxReturn", "blocking": true }
+    ],
+    "completeness_checks": ["product_unit.deliverables ALL present"],
+    "evidence_required": [
+      { "kind": "TAX_RETURN_CERT_UTXO", "description": "Tax return certificate with payment proof", "blocking": true }
+    ]
+  },
+  "utxo_state_machine": {
+    "states": ["DRAFT", "REVIEWED", "APPROVED", "DELIVERABLE"],
+    "transitions": [
+      { "from": "DRAFT", "to": "REVIEWED", "condition": "evidence_required ALL present", "auto": true },
+      { "from": "REVIEWED", "to": "APPROVED", "condition": "tax_filing_accepted=true", "auto": true },
+      { "from": "APPROVED", "to": "DELIVERABLE", "condition": "payment_certificate_attached=true", "auto": true }
+    ]
+  },
+  "upstream_spu_refs": ["v://cn.zhongbei/spu/finance/collection@v1"],
+  "downstream_spu_refs": ["v://cn.zhongbei/spu/bridge/settlement_cert@v1"]
+}

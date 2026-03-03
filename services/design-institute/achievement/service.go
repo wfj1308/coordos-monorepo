@@ -2,6 +2,7 @@ package achievement
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -17,10 +18,10 @@ type AchievementUTXO struct {
 	ExecutorRef string
 	GenesisRef  *string
 	ContractID  *int64
-	Payload     json.RawMessage
+	Payload     *json.RawMessage
 	ProofHash   string
-	Status      string // PENDING/SETTLED/DISPUTED/LEGACY
-	Source      string // SPU_INGEST/LEGACY_IMPORT/MANUAL
+	Status      string
+	Source      string
 	TenantID    int
 	IngestedAt  time.Time
 	SettledAt   *time.Time
@@ -30,14 +31,17 @@ type Store interface {
 	Create(ctx context.Context, a *AchievementUTXO) (int64, error)
 	Get(ctx context.Context, id int64) (*AchievementUTXO, error)
 	GetByUTXORef(ctx context.Context, utxoRef string) (*AchievementUTXO, error)
+	GetByProofHash(ctx context.Context, proofHash string) (*AchievementUTXO, error)
 	SetContract(ctx context.Context, id, contractID int64) error
 	SetSettled(ctx context.Context, id int64, settledAt time.Time) error
+	SettleByProject(ctx context.Context, projectRef string, settledAt time.Time) (int64, error)
 	List(ctx context.Context, limit, offset int) ([]*AchievementUTXO, int, error)
 	ListByExecutor(ctx context.Context, executorRef string, limit, offset int) ([]*AchievementUTXO, int, error)
 	ListByExecutorWithTenants(ctx context.Context, executorRef string, tenantIDs []int, limit, offset int) ([]*AchievementUTXO, int, error)
 	ListByProject(ctx context.Context, projectRef string) ([]*AchievementUTXO, error)
 	ListByContract(ctx context.Context, contractID int64) ([]*AchievementUTXO, error)
 	CountByExecutorAndPeriod(ctx context.Context, executorRef string, from, to time.Time) (int, float64, error)
+	BindCredential(ctx context.Context, achievementID, credentialID int64, projectRef, executorRef string) error
 }
 
 type Service struct {
@@ -94,6 +98,14 @@ func (s *Service) ListByContract(ctx context.Context, contractID int64) ([]*Achi
 	return s.store.ListByContract(ctx, contractID)
 }
 
+func (s *Service) AutoSettleProject(ctx context.Context, projectRef string) (int64, error) {
+	projectRef = strings.TrimSpace(projectRef)
+	if projectRef == "" {
+		return 0, fmt.Errorf("project_ref is required")
+	}
+	return s.store.SettleByProject(ctx, projectRef, time.Now().UTC())
+}
+
 // PGStore
 type PGStore struct{ db *sql.DB }
 
@@ -128,6 +140,13 @@ func (s *PGStore) GetByUTXORef(ctx context.Context, utxoRef string) (*Achievemen
 		 FROM achievement_utxos WHERE utxo_ref=$1`, utxoRef))
 }
 
+func (s *PGStore) GetByProofHash(ctx context.Context, proofHash string) (*AchievementUTXO, error) {
+	return s.scan(s.db.QueryRowContext(ctx,
+		`SELECT id,utxo_ref,spu_ref,project_ref,executor_ref,genesis_ref,
+		        contract_id,payload,proof_hash,status,source,tenant_id,ingested_at,settled_at
+		 FROM achievement_utxos WHERE proof_hash=$1`, proofHash))
+}
+
 func (s *PGStore) SetContract(ctx context.Context, id, contractID int64) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE achievement_utxos SET contract_id=$1 WHERE id=$2`, contractID, id)
@@ -138,6 +157,22 @@ func (s *PGStore) SetSettled(ctx context.Context, id int64, settledAt time.Time)
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE achievement_utxos SET status='SETTLED', settled_at=$1 WHERE id=$2`, settledAt, id)
 	return err
+}
+
+func (s *PGStore) SettleByProject(ctx context.Context, projectRef string, settledAt time.Time) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE achievement_utxos
+		SET status='SETTLED', settled_at=$1
+		WHERE project_ref=$2 AND status<>'SETTLED'
+	`, settledAt, projectRef)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return affected, nil
 }
 
 func (s *PGStore) List(ctx context.Context, limit, offset int) ([]*AchievementUTXO, int, error) {
@@ -258,22 +293,52 @@ func (s *PGStore) CountByExecutorAndPeriod(ctx context.Context, executorRef stri
 	return count, amount, err
 }
 
+func (s *PGStore) BindCredential(ctx context.Context, achievementID, credentialID int64, projectRef, executorRef string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO resource_bindings (
+			resource_ref, resource_type, project_ref, executor_ref,
+			achievement_utxo_id, credential_id, status, tenant_id, bound_at
+		) VALUES ($1,$2,$3,$4,$5,$6,'ACTIVE',
+			(SELECT tenant_id FROM achievement_utxos WHERE id=$5 LIMIT 1),
+			NOW())
+		ON CONFLICT DO NOTHING`,
+		fmt.Sprintf("achievement:%d:credential:%d", achievementID, credentialID),
+		"CREDENTIAL_BINDING",
+		projectRef,
+		executorRef,
+		achievementID,
+		credentialID,
+	)
+	return err
+}
+
 func (s *PGStore) scan(row *sql.Row) (*AchievementUTXO, error) {
 	a := &AchievementUTXO{}
+	var payload []byte
 	err := row.Scan(&a.ID, &a.UTXORef, &a.SPURef, &a.ProjectRef, &a.ExecutorRef,
-		&a.GenesisRef, &a.ContractID, &a.Payload, &a.ProofHash,
+		&a.GenesisRef, &a.ContractID, &payload, &a.ProofHash,
 		&a.Status, &a.Source, &a.TenantID, &a.IngestedAt, &a.SettledAt)
-	return a, err
+	if err != nil {
+		return nil, err
+	}
+	if len(payload) > 0 {
+		a.Payload = (*json.RawMessage)(&payload)
+	}
+	return a, nil
 }
 
 func (s *PGStore) scanRows(rows *sql.Rows) ([]*AchievementUTXO, error) {
 	var list []*AchievementUTXO
 	for rows.Next() {
 		a := &AchievementUTXO{}
+		var payload []byte
 		if err := rows.Scan(&a.ID, &a.UTXORef, &a.SPURef, &a.ProjectRef, &a.ExecutorRef,
-			&a.GenesisRef, &a.ContractID, &a.Payload, &a.ProofHash,
+			&a.GenesisRef, &a.ContractID, &payload, &a.ProofHash,
 			&a.Status, &a.Source, &a.TenantID, &a.IngestedAt, &a.SettledAt); err != nil {
 			return nil, err
+		}
+		if len(payload) > 0 {
+			a.Payload = (*json.RawMessage)(&payload)
 		}
 		list = append(list, a)
 	}
@@ -289,6 +354,59 @@ type CreateManualInput struct {
 	Note        string          `json:"note"`
 }
 
+func (s *Service) GetByProofHash(ctx context.Context, proofHash string) (*AchievementUTXO, error) {
+	return s.store.GetByProofHash(ctx, proofHash)
+}
+
+func (s *Service) ValidateAchievement(ctx context.Context, utxo *AchievementUTXO, projectNode map[string]any) error {
+	if utxo == nil {
+		return fmt.Errorf("achievement utxo is nil")
+	}
+	if projectNode == nil {
+		return fmt.Errorf("project node not found")
+	}
+	if utxo.ProjectRef == "" {
+		return fmt.Errorf("achievement has no project_ref")
+	}
+	nodeRef, ok := projectNode["ref"].(string)
+	if !ok || nodeRef == "" {
+		return fmt.Errorf("project node has no ref")
+	}
+	if utxo.ProofHash == "" {
+		return fmt.Errorf("achievement has no proof_hash")
+	}
+	var payload json.RawMessage
+	if utxo.Payload != nil {
+		payload = *utxo.Payload
+	} else {
+		payload = json.RawMessage("{}")
+	}
+	expected := ComputeProofHash(utxo.SPURef, utxo.ProjectRef, utxo.ExecutorRef, payload)
+	if utxo.ProofHash != expected {
+		return fmt.Errorf("proof_hash mismatch: expected %s, got %s", expected, utxo.ProofHash)
+	}
+	return nil
+}
+
+func ComputeProofHash(spuRef, projectRef, executorRef string, payload json.RawMessage) string {
+	h := sha256.New()
+	h.Write([]byte(spuRef))
+	h.Write([]byte(projectRef))
+	h.Write([]byte(executorRef))
+	h.Write(payload)
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+func ComputeProofHashWithNamespace(spuRef, projectRef, executorRef, namespace string, payload json.RawMessage) string {
+	h := sha256.New()
+	h.Write([]byte(spuRef))
+	h.Write([]byte(projectRef))
+	h.Write([]byte(executorRef))
+	h.Write([]byte(namespace))
+	h.Write(payload)
+	return fmt.Sprintf("sha256:%x", h.Sum(nil))
+}
+
 func (s *Service) CreateManual(ctx context.Context, in CreateManualInput) (*AchievementUTXO, error) {
 	if in.ProjectRef == "" || in.ExecutorRef == "" {
 		return nil, fmt.Errorf("project_ref and executor_ref are required")
@@ -299,7 +417,6 @@ func (s *Service) CreateManual(ctx context.Context, in CreateManualInput) (*Achi
 	if in.Payload == nil {
 		in.Payload = json.RawMessage(`{}`)
 	}
-	// Manual review certificate creation must satisfy RULE-002.
 	if s.rule002Checker != nil && strings.Contains(in.SPURef, "review_certificate") {
 		ok, err := s.rule002Checker.CheckValidForRule002(ctx, in.ExecutorRef)
 		if err != nil {
@@ -316,7 +433,7 @@ func (s *Service) CreateManual(ctx context.Context, in CreateManualInput) (*Achi
 		ProjectRef:  in.ProjectRef,
 		ExecutorRef: in.ExecutorRef,
 		ContractID:  in.ContractID,
-		Payload:     in.Payload,
+		Payload:     &in.Payload,
 		ProofHash:   "",
 		Status:      "PENDING",
 		Source:      "MANUAL",
@@ -330,4 +447,9 @@ func (s *Service) CreateManual(ctx context.Context, in CreateManualInput) (*Achi
 	}
 	a.ID = id
 	return a, nil
+}
+
+// BindCredential 绑定资质到业绩（用证留痕）
+func (s *Service) BindCredential(ctx context.Context, achievementID, credentialID int64, projectRef, executorRef string) error {
+	return s.store.BindCredential(ctx, achievementID, credentialID, projectRef, executorRef)
 }

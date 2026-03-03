@@ -1,6 +1,6 @@
 {
   "$schema": "https://coordos.io/schemas/spu-catalog/v1",
-  "catalog_ref": "v://zhongbei/spu/bridge/catalog@v1",
+  "catalog_ref": "v://cn.zhongbei/spu/bridge/catalog@v1",
   "name": "桥梁工程SPU目录",
   "domain": "bridge",
   "version": "v1",
@@ -11,21 +11,21 @@
   "closure_chain": [
     {
       "seq": 1,
-      "spu_ref": "v://zhongbei/spu/bridge/pile_foundation_drawing@v1",
+      "spu_ref": "v://cn.zhongbei/spu/bridge/pile_foundation_drawing@v1",
       "name": "桩基施工图",
       "kind": "DRAWING",
       "stage": "设计",
       "auto_executable": "条件性（标准地质>90%置信度）",
       "blocking_for_next": true,
       "required_qualifications": [
-        "v://zhongbei/qualification/REG_STRUCTURE_LEVEL_1",
-        "v://zhongbei/qualification/BRIDGE_ENGINEER"
+        "v://cn.zhongbei/qualification/REG_STRUCTURE_LEVEL_1",
+        "v://cn.zhongbei/qualification/BRIDGE_ENGINEER"
       ],
       "note": "链路起点，所有后续SPU的基础"
     },
     {
       "seq": 2,
-      "spu_ref": "v://zhongbei/spu/bridge/pile_cap_drawing@v1",
+      "spu_ref": "v://cn.zhongbei/spu/bridge/pile_cap_drawing@v1",
       "name": "承台施工图",
       "kind": "DRAWING",
       "stage": "设计",
@@ -34,7 +34,7 @@
     },
     {
       "seq": 3,
-      "spu_ref": "v://zhongbei/spu/bridge/pier_rebar_drawing@v1",
+      "spu_ref": "v://cn.zhongbei/spu/bridge/pier_rebar_drawing@v1",
       "name": "墩柱配筋图",
       "kind": "DRAWING",
       "stage": "设计",
@@ -43,7 +43,7 @@
     },
     {
       "seq": 4,
-      "spu_ref": "v://zhongbei/spu/bridge/superstructure_drawing@v1",
+      "spu_ref": "v://cn.zhongbei/spu/bridge/superstructure_drawing@v1",
       "name": "上部结构施工图",
       "kind": "DRAWING",
       "stage": "设计",
@@ -53,7 +53,7 @@
     },
     {
       "seq": 5,
-      "spu_ref": "v://zhongbei/spu/bridge/concealed_acceptance@v1",
+      "spu_ref": "v://cn.zhongbei/spu/bridge/concealed_acceptance@v1",
       "name": "隐蔽工程验收记录",
       "kind": "RECORD",
       "stage": "施工",
@@ -63,7 +63,7 @@
     },
     {
       "seq": 6,
-      "spu_ref": "v://zhongbei/spu/bridge/prestress_record@v1",
+      "spu_ref": "v://cn.zhongbei/spu/bridge/prestress_record@v1",
       "name": "预应力张拉记录",
       "kind": "RECORD",
       "stage": "施工",
@@ -74,7 +74,7 @@
     },
     {
       "seq": 7,
-      "spu_ref": "v://zhongbei/spu/bridge/concrete_strength_report@v1",
+      "spu_ref": "v://cn.zhongbei/spu/bridge/concrete_strength_report@v1",
       "name": "混凝土强度检测报告",
       "kind": "REPORT",
       "stage": "施工",
@@ -84,7 +84,7 @@
     },
     {
       "seq": 8,
-      "spu_ref": "v://zhongbei/spu/bridge/coordinate_proof@v1",
+      "spu_ref": "v://cn.zhongbei/spu/bridge/coordinate_proof@v1",
       "name": "实测坐标证明",
       "kind": "PROVE",
       "stage": "竣工",
@@ -94,21 +94,21 @@
     },
     {
       "seq": 9,
-      "spu_ref": "v://zhongbei/spu/bridge/review_certificate@v1",
+      "spu_ref": "v://cn.zhongbei/spu/bridge/review_certificate@v1",
       "name": "审图合格证",
       "kind": "CERT",
       "stage": "竣工",
       "auto_executable": "否（审图机构出具）",
       "blocking_for_next": true,
       "required_qualifications": [
-        "v://zhongbei/qualification/REG_STRUCTURE_LEVEL_1",
-        "v://zhongbei/qualification/HEAD_OFFICE_REVIEW_SIGNATORY"
+        "v://cn.zhongbei/qualification/REG_STRUCTURE_LEVEL_1",
+        "v://cn.zhongbei/qualification/HEAD_OFFICE_REVIEW_SIGNATORY"
       ],
       "note": "RULE-002触发点：总院实质参与的核心证明"
     },
     {
       "seq": 10,
-      "spu_ref": "v://zhongbei/spu/bridge/settlement_cert@v1",
+      "spu_ref": "v://cn.zhongbei/spu/bridge/settlement_cert@v1",
       "name": "结算凭证",
       "kind": "CERT",
       "stage": "结算",

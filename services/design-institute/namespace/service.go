@@ -10,6 +10,40 @@ import (
 	"github.com/lib/pq"
 )
 
+func ExtractNamespace(ref string) string {
+	ref = strings.TrimSpace(ref)
+	if !strings.HasPrefix(ref, "v://") {
+		return ""
+	}
+	rest := strings.TrimPrefix(ref, "v://")
+	parts := strings.SplitN(rest, "/", 2)
+	if len(parts) == 0 || parts[0] == "" {
+		return ""
+	}
+	return "v://" + parts[0]
+}
+
+func ExtractNamespaceFromExecutor(executorRef string) string {
+	ns := ExtractNamespace(executorRef)
+	if ns == "" {
+		return ""
+	}
+	return ns
+}
+
+func IsSameNamespace(ref1, ref2 string) bool {
+	return ExtractNamespace(ref1) == ExtractNamespace(ref2)
+}
+
+func IsChildOf(childRef, parentRef string) bool {
+	childNS := ExtractNamespace(childRef)
+	parentNS := ExtractNamespace(parentRef)
+	if childNS == "" || parentNS == "" {
+		return false
+	}
+	return childNS == parentNS
+}
+
 type Namespace struct {
 	ID             int64     `json:"id"`
 	Ref            string    `json:"ref"`

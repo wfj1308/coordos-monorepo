@@ -19,17 +19,18 @@ import (
 // Dependencies injected at startup.
 
 type Deps struct {
-	Projects     store.ProjectTreeStore
-	Genesis      store.GenesisStore
-	Contracts    store.ContractStore
-	Parcels      store.ParcelStore
-	UTXOs        store.UTXOStore
-	Settlements  store.SettlementStore
-	Wallets      store.WalletStore
-	Audit        store.AuditStore
-	Rules        pc.ProjectRules
-	Fission      *pc.FissionEngine
-	StateMachine *pc.StateMachine
+	Projects      store.ProjectTreeStore
+	Genesis       store.GenesisStore
+	Contracts     store.ContractStore
+	Parcels       store.ParcelStore
+	UTXOs         store.UTXOStore
+	UTXORelations store.UTXORelationStore
+	Settlements   store.SettlementStore
+	Wallets       store.WalletStore
+	Audit         store.AuditStore
+	Rules         pc.ProjectRules
+	Fission       *pc.FissionEngine
+	StateMachine  *pc.StateMachine
 }
 
 // Actor is the authenticated user context.
@@ -302,31 +303,49 @@ func (a *SettleApp) TriggerSettle(actor Actor, projectRef pc.VRef) error {
 // helpers
 
 func (a *ProjectApp) buildContext(tenantID string) pc.ProjectContext {
+	var relStore pc.UTXORelationStore
+	if a.d.UTXORelations != nil {
+		relStore = pcUTXORelationAdapter{tenantID: tenantID, s: a.d.UTXORelations}
+	}
 	return pc.ProjectContext{
 		TenantID:      tenantID,
 		ProjectTree:   pcProjectTreeAdapter{tenantID: tenantID, s: a.d.Projects},
 		GenesisStore:  pcGenesisAdapter{tenantID: tenantID, s: a.d.Genesis},
 		ContractStore: pcContractAdapter{tenantID: tenantID, s: a.d.Contracts},
+		UTXOStore:     pcUTXOAdapter{tenantID: tenantID, s: a.d.UTXOs},
+		UTXORelations: relStore,
 		AuditStore:    pcAuditAdapter{tenantID: tenantID, s: a.d.Audit},
 	}
 }
 
 func (a *EventApp) buildContext(tenantID string) pc.ProjectContext {
+	var relStore pc.UTXORelationStore
+	if a.d.UTXORelations != nil {
+		relStore = pcUTXORelationAdapter{tenantID: tenantID, s: a.d.UTXORelations}
+	}
 	return pc.ProjectContext{
 		TenantID:      tenantID,
 		ProjectTree:   pcProjectTreeAdapter{tenantID: tenantID, s: a.d.Projects},
 		GenesisStore:  pcGenesisAdapter{tenantID: tenantID, s: a.d.Genesis},
 		ContractStore: pcContractAdapter{tenantID: tenantID, s: a.d.Contracts},
+		UTXOStore:     pcUTXOAdapter{tenantID: tenantID, s: a.d.UTXOs},
+		UTXORelations: relStore,
 		AuditStore:    pcAuditAdapter{tenantID: tenantID, s: a.d.Audit},
 	}
 }
 
 func (a *SettleApp) buildContext(tenantID string) pc.ProjectContext {
+	var relStore pc.UTXORelationStore
+	if a.d.UTXORelations != nil {
+		relStore = pcUTXORelationAdapter{tenantID: tenantID, s: a.d.UTXORelations}
+	}
 	return pc.ProjectContext{
 		TenantID:      tenantID,
 		ProjectTree:   pcProjectTreeAdapter{tenantID: tenantID, s: a.d.Projects},
 		GenesisStore:  pcGenesisAdapter{tenantID: tenantID, s: a.d.Genesis},
 		ContractStore: pcContractAdapter{tenantID: tenantID, s: a.d.Contracts},
+		UTXOStore:     pcUTXOAdapter{tenantID: tenantID, s: a.d.UTXOs},
+		UTXORelations: relStore,
 		AuditStore:    pcAuditAdapter{tenantID: tenantID, s: a.d.Audit},
 	}
 }

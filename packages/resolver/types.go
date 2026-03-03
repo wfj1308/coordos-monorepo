@@ -10,7 +10,11 @@
 
 package resolver
 
-import "time"
+import (
+	"time"
+
+	"coordos/vuri"
+)
 
 // ── 证书类型枚举 ─────────────────────────────────────────────
 
@@ -52,13 +56,13 @@ const (
 // Credential 一条资质记录，对应 credentials 表的一行
 type Credential struct {
 	ID         int64
-	HolderRef  string // executor_ref 或 company_ref
+	HolderRef  vuri.VRef // executor_ref 或 company_ref
 	HolderType HolderType
 	CertType   CertType
 	CertNumber string
 	IssuedAt   *time.Time
 	ExpiresAt  *time.Time // nil = 长期有效（企业资质类）
-	Scope      []string   // 允许执行的 SPU ref 列表，空=不限
+	Scope      []vuri.VRef   // 允许执行的 SPU ref 列表，空=不限
 	Status     string     // ACTIVE / EXPIRED / REVOKED / SUSPENDED
 	TenantID   int
 	CreatedAt  time.Time
@@ -91,9 +95,9 @@ const (
 
 // VerifyInput 校验请求
 type VerifyInput struct {
-	ExecutorRef string    // 要校验的执行体
-	ProjectRef  string    // 项目上下文（可为空，用于跨项目权限）
-	SPURef      string    // 关联 SPU（用于从 SPU 规格里读取资质要求）
+	ExecutorRef vuri.VRef // 要校验的执行体
+	ProjectRef  vuri.VRef // 项目上下文（可为空，用于跨项目权限）
+	SPURef      vuri.VRef // 关联 SPU（用于从 SPU 规格里读取资质要求）
 	Action      Action    // 要执行的动作
 	ValidOn     time.Time // 校验时间点，默认 time.Now()
 	TenantID    int
@@ -136,8 +140,8 @@ func (r *VerifyResult) AddFail(req, reason string) {
 // ResolveInput 寻址请求：给定任务约束，找谁能做
 type ResolveInput struct {
 	TenantID       int
-	ProjectRef     string // 项目上下文
-	SPURef         string // 任务类型（从 SPU 规格读取资质要求）
+	ProjectRef     vuri.VRef // 项目上下文
+	SPURef         vuri.VRef // 任务类型（从 SPU 规格读取资质要求）
 	Action         Action
 	NeedCertTypes  []CertType // 明确要求的证书类型
 	HeadOfficeOnly bool       // 是否仅限总院执行体（RULE-002）
@@ -147,7 +151,7 @@ type ResolveInput struct {
 
 // Candidate 候选执行体
 type Candidate struct {
-	ExecutorRef    string
+	ExecutorRef    vuri.VRef
 	Name           string       // 显示名（从 employee/company 表读取）
 	MatchedCreds   []Credential // 匹配的证书列表
 	ActiveProjects int          // 当前在建项目数
@@ -159,7 +163,7 @@ type Candidate struct {
 
 // OccupiedState 执行体当前资源占用状态
 type OccupiedState struct {
-	ExecutorRef    string
+	ExecutorRef    vuri.VRef
 	ActiveProjects int               // 当前 IN_PROGRESS 项目数
 	ProjectLimit   int               // 上限（从证书类型推算，默认5）
 	Available      bool              // 是否还能承接新项目
@@ -168,7 +172,7 @@ type OccupiedState struct {
 
 // OccupiedProject 单个在建项目的占用信息
 type OccupiedProject struct {
-	ProjectRef  string
+	ProjectRef  vuri.VRef
 	ProjectName string
 	Role        string // 在项目里的角色（EXECUTOR/REVIEWER/etc）
 	Since       time.Time

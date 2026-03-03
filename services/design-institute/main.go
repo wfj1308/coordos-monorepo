@@ -6,13 +6,16 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"coordos/design-institute/achievement"
 	"coordos/design-institute/achievementprofile"
 	"coordos/design-institute/api"
 	"coordos/design-institute/approve"
+	"coordos/design-institute/bid"
 	"coordos/design-institute/bidding"
+	"coordos/design-institute/capability"
 	"coordos/design-institute/company"
 	"coordos/design-institute/compliance"
 	"coordos/design-institute/contract"
@@ -26,11 +29,14 @@ import (
 	"coordos/design-institute/publicapi"
 	"coordos/design-institute/publishing"
 	"coordos/design-institute/qualification"
+	"coordos/design-institute/register"
 	"coordos/design-institute/report"
 	"coordos/design-institute/resolve"
 	"coordos/design-institute/resourcebinding"
+	"coordos/design-institute/review_publish"
 	"coordos/design-institute/rights"
 	"coordos/design-institute/settlement"
+	"coordos/design-institute/stepachievement"
 
 	_ "github.com/lib/pq"
 )
@@ -87,8 +93,13 @@ func main() {
 	publishingSvc := publishing.NewService(publishing.NewPGStore(db), cfg.TenantID)
 	publicAPISvc := publicapi.NewService(publicapi.NewPGStore(db), cfg.TenantID, cfg.SPUCatalogPath)
 	biddingSvc := bidding.NewService(bidding.NewPGStore(db), cfg.TenantID)
+	bidSvc := bid.NewService(bid.NewPGStore(db), cfg.TenantID)
+	capabilitySvc := capability.NewService(db, cfg.TenantID)
 	complianceSvc := compliance.NewService(compliance.NewPGStore(db), cfg.TenantID)
 	resourceBindingSvc := resourcebinding.NewService(resourcebinding.NewPGStore(db), cfg.TenantID)
+	registerSvc := register.NewService(db, cfg.TenantID)
+	reviewPublishSvc := review_publish.NewService(review_publish.NewPGStore(db), cfg.TenantID)
+	stepAchievementSvc := stepachievement.NewService(db, cfg.TenantID)
 	achievementSvc.SetRule002Checker(qualificationSvc)
 
 	approveSvc.SetCallbacks(
@@ -117,8 +128,13 @@ func main() {
 		Publishing:         publishingSvc,
 		PublicAPI:          publicAPISvc,
 		Bidding:            biddingSvc,
+		Bid:                bidSvc,
+		Capability:         capabilitySvc,
 		Compliance:         complianceSvc,
 		ResourceBinding:    resourceBindingSvc,
+		Register:           registerSvc,
+		ReviewPublish:      reviewPublishSvc,
+		StepAchievement:    stepAchievementSvc,
 	})
 
 	server := &http.Server{
@@ -135,6 +151,78 @@ func main() {
 
 func ensureSchemaCompat(ctx context.Context, db *sql.DB) error {
 	statements := []string{
+		`ALTER TABLE companies ADD COLUMN IF NOT EXISTS short_name VARCHAR(255)`,
+		`ALTER TABLE companies ADD COLUMN IF NOT EXISTS credit_code VARCHAR(64)`,
+		`ALTER TABLE companies ADD COLUMN IF NOT EXISTS reg_capital BIGINT`,
+		`ALTER TABLE companies ADD COLUMN IF NOT EXISTS legal_rep VARCHAR(255)`,
+		`ALTER TABLE companies ADD COLUMN IF NOT EXISTS tech_director VARCHAR(255)`,
+		`ALTER TABLE companies ADD COLUMN IF NOT EXISTS established_at DATE`,
+		`ALTER TABLE companies ADD COLUMN IF NOT EXISTS cert_no VARCHAR(255)`,
+		`ALTER TABLE companies ADD COLUMN IF NOT EXISTS cert_valid_until DATE`,
+		`DROP INDEX IF EXISTS idx_companies_credit_code_uq`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_companies_credit_code_uq
+		   ON companies(credit_code)`,
+		`ALTER TABLE employees ADD COLUMN IF NOT EXISTS id_card VARCHAR(32)`,
+		`ALTER TABLE employees ADD COLUMN IF NOT EXISTS company_ref VARCHAR(500)`,
+		`DROP INDEX IF EXISTS idx_employees_id_card_uq`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_id_card_uq
+		   ON employees(id_card)`,
+		`ALTER TABLE qualifications ADD COLUMN IF NOT EXISTS max_concurrent_projects INT`,
+		`ALTER TABLE qualifications ALTER COLUMN holder_id SET DEFAULT 0`,
+		`ALTER TABLE qualifications ALTER COLUMN holder_name SET DEFAULT ''`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_qualifications_cert_no_uq
+		   ON qualifications(cert_no)`,
+		`CREATE TABLE IF NOT EXISTS genesis_utxos (
+			id BIGSERIAL PRIMARY KEY,
+			ref VARCHAR(500) NOT NULL,
+			resource_type VARCHAR(100) NOT NULL,
+			name VARCHAR(500) NOT NULL,
+			total_amount BIGINT NOT NULL DEFAULT 0,
+			available_amount BIGINT NOT NULL DEFAULT 0,
+			unit VARCHAR(50) NOT NULL DEFAULT '',
+			batch_source VARCHAR(50) NOT NULL DEFAULT 'INTERNAL',
+			holders JSONB NOT NULL DEFAULT '[]'::jsonb,
+			quantity INT NOT NULL DEFAULT 1,
+			constraints JSONB NOT NULL DEFAULT '{"time":{},"quantity":{},"scope":{}}'::jsonb,
+			consumed_by JSONB NOT NULL DEFAULT '[]'::jsonb,
+			remaining INT NOT NULL DEFAULT 1,
+			status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+			tenant_id INT NOT NULL DEFAULT 10000,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			UNIQUE (tenant_id, ref)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_genesis_utxos_tenant_type
+		   ON genesis_utxos(tenant_id, resource_type, status)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_genesis_utxos_ref_uq
+		   ON genesis_utxos(ref)`,
+		`ALTER TABLE genesis_utxos ADD COLUMN IF NOT EXISTS batch_source VARCHAR(50) DEFAULT 'INTERNAL'`,
+		`ALTER TABLE genesis_utxos ADD COLUMN IF NOT EXISTS holders JSONB DEFAULT '[]'::jsonb`,
+		`ALTER TABLE genesis_utxos ADD COLUMN IF NOT EXISTS quantity INT DEFAULT 1`,
+		`ALTER TABLE genesis_utxos ADD COLUMN IF NOT EXISTS consumed_by JSONB DEFAULT '[]'::jsonb`,
+		`ALTER TABLE genesis_utxos ADD COLUMN IF NOT EXISTS remaining INT DEFAULT 1`,
+		`DO $$
+		BEGIN
+			IF EXISTS (
+				SELECT 1
+				FROM information_schema.columns
+				WHERE table_schema='public'
+				  AND table_name='genesis_utxos'
+				  AND column_name='constraint_json'
+			) THEN
+				ALTER TABLE genesis_utxos RENAME COLUMN constraint_json TO constraints;
+			END IF;
+		END $$`,
+		`ALTER TABLE namespaces ADD COLUMN IF NOT EXISTS short_code VARCHAR(100)`,
+		`ALTER TABLE namespaces ADD COLUMN IF NOT EXISTS org_type VARCHAR(50)`,
+		`ALTER TABLE namespaces ADD COLUMN IF NOT EXISTS depth INT NOT NULL DEFAULT 0`,
+		`ALTER TABLE namespaces ADD COLUMN IF NOT EXISTS path TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE namespaces ADD COLUMN IF NOT EXISTS accessible_genesis TEXT[] NOT NULL DEFAULT '{}'`,
+		`ALTER TABLE namespaces ADD COLUMN IF NOT EXISTS manage_fee_rate DOUBLE PRECISION NOT NULL DEFAULT 0`,
+		`ALTER TABLE namespaces ADD COLUMN IF NOT EXISTS route_policy JSONB NOT NULL DEFAULT '{}'::jsonb`,
+		`ALTER TABLE namespaces ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE'`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_namespaces_ref_uq
+		   ON namespaces(ref)`,
 		`ALTER TABLE balances ADD COLUMN IF NOT EXISTS contract_id BIGINT REFERENCES contracts(id)`,
 		`CREATE INDEX IF NOT EXISTS idx_balances_contract ON balances(contract_id)`,
 		`CREATE TABLE IF NOT EXISTS qualification_assignments (
@@ -214,6 +302,23 @@ func ensureSchemaCompat(ctx context.Context, db *sql.DB) error {
 		   ON drawing_versions(tenant_id, drawing_no, status, version_no DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_drawing_versions_project
 		   ON drawing_versions(tenant_id, project_ref, drawing_no, version_no DESC)`,
+		`ALTER TABLE drawing_versions ADD COLUMN IF NOT EXISTS proof_hash VARCHAR(128)`,
+		`CREATE INDEX IF NOT EXISTS idx_drawing_versions_proof
+		   ON drawing_versions(tenant_id, proof_hash)`,
+		`CREATE TABLE IF NOT EXISTS review_opinions (
+			id                BIGSERIAL PRIMARY KEY,
+			project_ref       VARCHAR(500) NOT NULL,
+			drawing_no        VARCHAR(255) NOT NULL,
+			total_opinions    INT NOT NULL DEFAULT 0,
+			processed_opinions INT NOT NULL DEFAULT 0,
+			major_opinions    INT NOT NULL DEFAULT 0,
+			tenant_id         INT NOT NULL DEFAULT 10000,
+			created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			UNIQUE (tenant_id, project_ref, drawing_no)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_review_opinions_project
+		   ON review_opinions(tenant_id, project_ref, drawing_no)`,
 		`CREATE TABLE IF NOT EXISTS bid_profiles (
 			id BIGSERIAL PRIMARY KEY,
 			ref VARCHAR(500) NOT NULL UNIQUE,
@@ -245,6 +350,24 @@ func ensureSchemaCompat(ctx context.Context, db *sql.DB) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_violation_executor
 		   ON violation_records(tenant_id, executor_ref, occurred_at DESC)`,
+		`ALTER TABLE violation_records ADD COLUMN IF NOT EXISTS violation_type VARCHAR(100)`,
+		`ALTER TABLE violation_records ADD COLUMN IF NOT EXISTS utxo_ref VARCHAR(500)`,
+		`ALTER TABLE violation_records ADD COLUMN IF NOT EXISTS description TEXT`,
+		`ALTER TABLE violation_records ADD COLUMN IF NOT EXISTS penalty NUMERIC NOT NULL DEFAULT 0`,
+		`ALTER TABLE violation_records ADD COLUMN IF NOT EXISTS recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`,
+		`UPDATE violation_records
+		   SET violation_type = COALESCE(NULLIF(violation_type,''), rule_code),
+		       description = COALESCE(NULLIF(description,''), message),
+		       recorded_at = COALESCE(recorded_at, occurred_at, created_at)
+		 WHERE violation_type IS NULL
+		    OR description IS NULL
+		    OR recorded_at IS NULL`,
+		`ALTER TABLE violation_records DROP CONSTRAINT IF EXISTS violation_records_severity_check`,
+		`ALTER TABLE violation_records
+		   ADD CONSTRAINT violation_records_severity_check
+		   CHECK (severity IN ('LOW','MEDIUM','HIGH','CRITICAL','MINOR','MAJOR'))`,
+		`CREATE INDEX IF NOT EXISTS idx_violation_executor_recorded
+		   ON violation_records(tenant_id, executor_ref, recorded_at DESC)`,
 		`CREATE TABLE IF NOT EXISTS executor_stats (
 			id BIGSERIAL PRIMARY KEY,
 			executor_ref VARCHAR(500) NOT NULL,
@@ -258,6 +381,58 @@ func ensureSchemaCompat(ctx context.Context, db *sql.DB) error {
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			UNIQUE (tenant_id, executor_ref)
 		)`,
+		`ALTER TABLE executor_stats ADD COLUMN IF NOT EXISTS spu_pass_rate NUMERIC NOT NULL DEFAULT 0`,
+		`ALTER TABLE executor_stats ADD COLUMN IF NOT EXISTS violation_count INT NOT NULL DEFAULT 0`,
+		`ALTER TABLE executor_stats ADD COLUMN IF NOT EXISTS capability_level_num NUMERIC NOT NULL DEFAULT 0`,
+		`ALTER TABLE executor_stats ADD COLUMN IF NOT EXISTS specialty_spus TEXT[] NOT NULL DEFAULT '{}'`,
+		`ALTER TABLE executor_stats ADD COLUMN IF NOT EXISTS last_computed_at TIMESTAMPTZ`,
+		`CREATE OR REPLACE FUNCTION capability_grade(level NUMERIC)
+		 RETURNS TEXT
+		 LANGUAGE plpgsql
+		 AS $$
+		 BEGIN
+		   IF level >= 4.5 THEN
+		     RETURN 'CHIEF_ENGINEER';
+		   ELSIF level >= 4 THEN
+		     RETURN 'SENIOR_ENGINEER';
+		   ELSIF level >= 3 THEN
+		     RETURN 'REGISTERED_ENGINEER';
+		   ELSIF level >= 2 THEN
+		     RETURN 'LEAD_ENGINEER';
+		   ELSE
+		     RETURN 'ASSISTANT';
+		   END IF;
+		 END;
+		 $$`,
+		`CREATE OR REPLACE FUNCTION compute_capability_level(
+		   base_level NUMERIC,
+		   pass_rate NUMERIC,
+		   utxo_count INT,
+		   violation_count INT,
+		   penalty NUMERIC
+		 )
+		 RETURNS NUMERIC
+		 LANGUAGE plpgsql
+		 AS $$
+		 DECLARE
+		   level NUMERIC := COALESCE(base_level, 2);
+		 BEGIN
+		   IF COALESCE(utxo_count, 0) >= 20 AND COALESCE(pass_rate, 0) >= 0.95 AND COALESCE(violation_count, 0) = 0 THEN
+		     level := level + 0.5;
+		   END IF;
+		   IF COALESCE(utxo_count, 0) >= 50 THEN
+		     level := level + 0.2;
+		   END IF;
+		   level := level + ((COALESCE(pass_rate, 0) - 0.8) * 0.8) + COALESCE(penalty, 0);
+		   IF level < 0 THEN
+		     level := 0;
+		   END IF;
+		   IF level > 5 THEN
+		     level := 5;
+		   END IF;
+		   RETURN level;
+		 END;
+		 $$`,
 		`CREATE TABLE IF NOT EXISTS resource_bindings (
 			id BIGSERIAL PRIMARY KEY,
 			resource_ref VARCHAR(500) NOT NULL,
@@ -272,7 +447,9 @@ func ensureSchemaCompat(ctx context.Context, db *sql.DB) error {
 			bound_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			released_at TIMESTAMPTZ,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			achievement_utxo_id BIGINT,
+			credential_id BIGINT
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_resource_bindings_project
 		   ON resource_bindings(tenant_id, project_ref, status, bound_at DESC)`,
@@ -280,10 +457,27 @@ func ensureSchemaCompat(ctx context.Context, db *sql.DB) error {
 		   ON resource_bindings(tenant_id, executor_ref, status, bound_at DESC)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_resource_bindings_active_unique
 		   ON resource_bindings(tenant_id, resource_ref) WHERE status='ACTIVE'`,
+		`ALTER TABLE resource_bindings ADD COLUMN IF NOT EXISTS achievement_utxo_id BIGINT`,
+		`ALTER TABLE resource_bindings ADD COLUMN IF NOT EXISTS credential_id BIGINT`,
+
+		// 用证留痕视图
+		`CREATE OR REPLACE VIEW credential_trace AS
+		 SELECT a.id AS achievement_id, a.utxo_ref, a.spu_ref, a.project_ref, a.executor_ref, a.proof_hash,
+		        q.id AS credential_id, q.qual_type, q.cert_no, q.holder_name AS credential_holder,
+		        a.executor_ref AS actual_executor, emp.name AS executor_name,
+		        rb.bound_at, rb.status AS binding_status
+		 FROM achievement_utxos a
+		 LEFT JOIN resource_bindings rb ON rb.achievement_utxo_id = a.id
+		 LEFT JOIN qualifications q ON q.id = rb.credential_id
+		 LEFT JOIN employees emp ON emp.executor_ref = a.executor_ref`,
 	}
 	for _, stmt := range statements {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("apply statement failed: %w", err)
+			preview := strings.Join(strings.Fields(stmt), " ")
+			if len(preview) > 140 {
+				preview = preview[:140] + "..."
+			}
+			return fmt.Errorf("apply statement failed: %s: %w", preview, err)
 		}
 	}
 	return nil

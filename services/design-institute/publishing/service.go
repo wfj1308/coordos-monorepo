@@ -2,7 +2,9 @@ package publishing
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -27,6 +29,7 @@ type DrawingVersion struct {
 	ProjectRef    string          `json:"project_ref"`
 	ReviewCertRef string          `json:"review_cert_ref"`
 	FileHash      string          `json:"file_hash"`
+	ProofHash     string          `json:"proof_hash"`
 	PublisherRef  string          `json:"publisher_ref"`
 	Status        string          `json:"status"`
 	Payload       json.RawMessage `json:"payload"`
@@ -51,6 +54,18 @@ type PublishDrawingInput struct {
 	Payload       json.RawMessage `json:"payload"`
 }
 
+type ReviewOpinionStats struct {
+	TotalOpinions     int `json:"total_opinions"`
+	ProcessedOpinions int `json:"processed_opinions"`
+	MajorOpinions     int `json:"major_opinions"`
+	ProcessingRate    int `json:"processing_rate"`
+}
+
+type Validator interface {
+	CheckValidForRule002(ctx context.Context, executorRef string) (bool, error)
+	GetReviewOpinionStats(ctx context.Context, projectRef, drawingNo string) (*ReviewOpinionStats, error)
+}
+
 type Store interface {
 	CreateReviewCert(ctx context.Context, item *ReviewCertificate) error
 	GetLatestReviewCert(ctx context.Context, tenantID int, projectRef, drawingNo string) (*ReviewCertificate, error)
@@ -59,15 +74,21 @@ type Store interface {
 	GetCurrentDrawing(ctx context.Context, tenantID int, drawingNo string) (*DrawingVersion, error)
 	GetDrawingChain(ctx context.Context, tenantID int, drawingNo string) ([]*DrawingVersion, error)
 	ListProjectDrawings(ctx context.Context, tenantID int, projectRef string) ([]*DrawingVersion, error)
+	GetPreviousProofHash(ctx context.Context, tenantID int, drawingNo string) (string, error)
 }
 
 type Service struct {
-	store    Store
-	tenantID int
+	store     Store
+	tenantID  int
+	validator Validator
 }
 
 func NewService(store Store, tenantID int) *Service {
 	return &Service{store: store, tenantID: tenantID}
+}
+
+func (s *Service) SetValidator(v Validator) {
+	s.validator = v
 }
 
 func (s *Service) IssueReviewCert(ctx context.Context, in IssueReviewCertInput) (*ReviewCertificate, error) {
@@ -77,6 +98,27 @@ func (s *Service) IssueReviewCert(ctx context.Context, in IssueReviewCertInput) 
 	if projectRef == "" || drawingNo == "" || executorRef == "" {
 		return nil, fmt.Errorf("project_ref, drawing_no and executor_ref are required")
 	}
+
+	if s.validator != nil {
+		valid, err := s.validator.CheckValidForRule002(ctx, executorRef)
+		if err != nil {
+			return nil, fmt.Errorf("RULE-002 校验失败: %w", err)
+		}
+		if !valid {
+			return nil, fmt.Errorf("RULE-002 校验不通过: 执行体 %s 不具备 REG_STRUCT 证书或非总院人员", executorRef)
+		}
+
+		stats, err := s.validator.GetReviewOpinionStats(ctx, projectRef, drawingNo)
+		if err == nil && stats != nil {
+			if stats.ProcessingRate < 100 {
+				return nil, fmt.Errorf("RULE-002 校验不通过: 意见处理率 %d%%，必须 100%%", stats.ProcessingRate)
+			}
+			if stats.MajorOpinions > 0 {
+				return nil, fmt.Errorf("RULE-002 校验不通过: 存在 %d 条重大意见，必须为零", stats.MajorOpinions)
+			}
+		}
+	}
+
 	payload := in.Payload
 	if len(payload) == 0 {
 		payload = json.RawMessage(`{}`)
@@ -122,6 +164,9 @@ func (s *Service) Publish(ctx context.Context, in PublishDrawingInput) (*Drawing
 	if len(payload) == 0 {
 		payload = json.RawMessage(`{}`)
 	}
+
+	prevProofHash, _ := s.store.GetPreviousProofHash(ctx, s.tenantID, drawingNo)
+
 	item := &DrawingVersion{
 		DrawingNo:     drawingNo,
 		ProjectRef:    projectRef,
@@ -137,10 +182,23 @@ func (s *Service) Publish(ctx context.Context, in PublishDrawingInput) (*Drawing
 	if item.PublisherRef == "" {
 		item.PublisherRef = reviewCert.ExecutorRef
 	}
+
+	item.ProofHash = computeProofHash(drawingNo, item.FileHash, reviewCert.CertRef, prevProofHash, item.CreatedAt)
+
 	if err := s.store.PublishDrawing(ctx, item); err != nil {
 		return nil, err
 	}
 	return item, nil
+}
+
+func computeProofHash(drawingNo, fileHash, reviewCertRef, prevProofHash string, createdAt time.Time) string {
+	h := sha256.New()
+	h.Write([]byte(drawingNo))
+	h.Write([]byte(fileHash))
+	h.Write([]byte(reviewCertRef))
+	h.Write([]byte(prevProofHash))
+	h.Write([]byte(createdAt.UTC().Format(time.RFC3339Nano)))
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func (s *Service) Current(ctx context.Context, drawingNo string) (*DrawingVersion, error) {
@@ -273,8 +331,8 @@ func (s *PGStore) PublishDrawing(ctx context.Context, item *DrawingVersion) erro
 	if err = tx.QueryRowContext(ctx, `
 		INSERT INTO drawing_versions (
 			drawing_no, version_no, project_ref, review_cert_ref,
-			file_hash, publisher_ref, status, payload, tenant_id, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,'CURRENT',$7,$8,$9,$10)
+			file_hash, proof_hash, publisher_ref, status, payload, tenant_id, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,'CURRENT',$8,$9,$10,$11)
 		RETURNING id, status
 	`,
 		item.DrawingNo,
@@ -282,6 +340,7 @@ func (s *PGStore) PublishDrawing(ctx context.Context, item *DrawingVersion) erro
 		item.ProjectRef,
 		item.ReviewCertRef,
 		item.FileHash,
+		item.ProofHash,
 		item.PublisherRef,
 		item.Payload,
 		item.TenantID,
@@ -301,7 +360,7 @@ func (s *PGStore) GetCurrentDrawing(ctx context.Context, tenantID int, drawingNo
 	item := &DrawingVersion{}
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, drawing_no, version_no, project_ref, review_cert_ref, file_hash,
-		       publisher_ref, status, payload, tenant_id, created_at, updated_at
+		       COALESCE(proof_hash, ''), publisher_ref, status, payload, tenant_id, created_at, updated_at
 		FROM drawing_versions
 		WHERE tenant_id=$1 AND drawing_no=$2 AND status='CURRENT'
 		ORDER BY version_no DESC
@@ -313,6 +372,7 @@ func (s *PGStore) GetCurrentDrawing(ctx context.Context, tenantID int, drawingNo
 		&item.ProjectRef,
 		&item.ReviewCertRef,
 		&item.FileHash,
+		&item.ProofHash,
 		&item.PublisherRef,
 		&item.Status,
 		&item.Payload,
@@ -332,7 +392,7 @@ func (s *PGStore) GetCurrentDrawing(ctx context.Context, tenantID int, drawingNo
 func (s *PGStore) GetDrawingChain(ctx context.Context, tenantID int, drawingNo string) ([]*DrawingVersion, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, drawing_no, version_no, project_ref, review_cert_ref, file_hash,
-		       publisher_ref, status, payload, tenant_id, created_at, updated_at
+		       COALESCE(proof_hash, ''), publisher_ref, status, payload, tenant_id, created_at, updated_at
 		FROM drawing_versions
 		WHERE tenant_id=$1 AND drawing_no=$2
 		ORDER BY version_no DESC
@@ -351,6 +411,7 @@ func (s *PGStore) GetDrawingChain(ctx context.Context, tenantID int, drawingNo s
 			&item.ProjectRef,
 			&item.ReviewCertRef,
 			&item.FileHash,
+			&item.ProofHash,
 			&item.PublisherRef,
 			&item.Status,
 			&item.Payload,
@@ -368,7 +429,7 @@ func (s *PGStore) GetDrawingChain(ctx context.Context, tenantID int, drawingNo s
 func (s *PGStore) ListProjectDrawings(ctx context.Context, tenantID int, projectRef string) ([]*DrawingVersion, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, drawing_no, version_no, project_ref, review_cert_ref, file_hash,
-		       publisher_ref, status, payload, tenant_id, created_at, updated_at
+		       COALESCE(proof_hash, ''), publisher_ref, status, payload, tenant_id, created_at, updated_at
 		FROM drawing_versions
 		WHERE tenant_id=$1 AND project_ref=$2
 		ORDER BY drawing_no ASC, version_no DESC
@@ -387,6 +448,7 @@ func (s *PGStore) ListProjectDrawings(ctx context.Context, tenantID int, project
 			&item.ProjectRef,
 			&item.ReviewCertRef,
 			&item.FileHash,
+			&item.ProofHash,
 			&item.PublisherRef,
 			&item.Status,
 			&item.Payload,
@@ -399,4 +461,19 @@ func (s *PGStore) ListProjectDrawings(ctx context.Context, tenantID int, project
 		out = append(out, item)
 	}
 	return out, rows.Err()
+}
+
+func (s *PGStore) GetPreviousProofHash(ctx context.Context, tenantID int, drawingNo string) (string, error) {
+	var proofHash string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(proof_hash, '')
+		FROM drawing_versions
+		WHERE tenant_id=$1 AND drawing_no=$2 AND status='CURRENT'
+		ORDER BY version_no DESC
+		LIMIT 1
+	`, tenantID, drawingNo).Scan(&proofHash)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return proofHash, err
 }

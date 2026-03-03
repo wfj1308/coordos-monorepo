@@ -225,8 +225,32 @@ CREATE TABLE IF NOT EXISTS drawings (
     project_ref     VARCHAR(500),
     spu_ref         VARCHAR(500),
     utxo_ref        VARCHAR(500),
-    migrate_status  VARCHAR(20) NOT NULL DEFAULT 'PENDING'
+    migrate_status  VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    
+    -- 版本链：图纸版本追踪
+    drawing_no      VARCHAR(255),              -- 图纸编号（唯一）
+    version         INT NOT NULL DEFAULT 1,   -- 版本号
+    prev_version_id BIGINT REFERENCES drawings(id), -- 前一版本
+    status          VARCHAR(20) NOT NULL DEFAULT 'DRAFT' 
+                    CHECK (status IN ('DRAFT','REVIEWING','SEALED','PUBLISHED','SUPERSEDED')),
+    
+    -- 审图证引用：每张图纸必须有审图合格证才能出版
+    review_cert_utxo_ref VARCHAR(500),        -- 关联的审图合格证 UTXO
+    review_cert_id  BIGINT REFERENCES achievement_utxos(id),
+    sealed_at       TIMESTAMPTZ,              -- 盖章时间
+    sealed_by       VARCHAR(500),             -- 盖章人
+    
+    -- 出版记录
+    published_at    TIMESTAMPTZ,              -- 出版时间
+    published_by    VARCHAR(500),             -- 出版人
+    proof_hash      VARCHAR(255)              -- 出版证明hash
 );
+
+-- 图纸编号唯一索引
+CREATE UNIQUE INDEX IF NOT EXISTS idx_drawings_no_version 
+    ON drawings(tenant_id, drawing_no, version);
+CREATE INDEX IF NOT EXISTS idx_drawings_status ON drawings(tenant_id, status);
+CREATE INDEX IF NOT EXISTS idx_drawings_review_cert ON drawings(review_cert_utxo_ref);
 
 --
 CREATE TABLE IF NOT EXISTS achievement_utxos (
@@ -687,11 +711,16 @@ CREATE INDEX IF NOT EXISTS idx_bid_profiles_project
 CREATE TABLE IF NOT EXISTS violation_records (
     id           BIGSERIAL PRIMARY KEY,
     executor_ref VARCHAR(500) NOT NULL,
+    violation_type VARCHAR(100),
     project_ref  VARCHAR(500) NOT NULL,
+    utxo_ref     VARCHAR(500),
     rule_code    VARCHAR(100) NOT NULL,
     severity     VARCHAR(20) NOT NULL
-                 CHECK (severity IN ('LOW','MEDIUM','HIGH','CRITICAL')),
+                 CHECK (severity IN ('LOW','MEDIUM','HIGH','CRITICAL','MINOR','MAJOR')),
+    description  TEXT,
     message      TEXT NOT NULL DEFAULT '',
+    penalty      NUMERIC NOT NULL DEFAULT 0,
+    recorded_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     occurred_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     tenant_id    INT NOT NULL DEFAULT 10000,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -699,20 +728,76 @@ CREATE TABLE IF NOT EXISTS violation_records (
 
 CREATE INDEX IF NOT EXISTS idx_violation_executor
     ON violation_records(tenant_id, executor_ref, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_violation_executor_recorded
+    ON violation_records(tenant_id, executor_ref, recorded_at DESC);
 
 CREATE TABLE IF NOT EXISTS executor_stats (
     id               BIGSERIAL PRIMARY KEY,
     executor_ref     VARCHAR(500) NOT NULL,
+    spu_pass_rate    NUMERIC NOT NULL DEFAULT 0,
     total_projects   INT NOT NULL DEFAULT 0,
     total_utxos      INT NOT NULL DEFAULT 0,
+    violation_count  INT NOT NULL DEFAULT 0,
     total_violations INT NOT NULL DEFAULT 0,
     last_violation_at TIMESTAMPTZ,
     score            INT NOT NULL DEFAULT 0,
+    capability_level_num NUMERIC NOT NULL DEFAULT 0,
     capability_level VARCHAR(20) NOT NULL DEFAULT 'RISK',
+    specialty_spus   TEXT[] NOT NULL DEFAULT '{}',
+    last_computed_at TIMESTAMPTZ,
     tenant_id        INT NOT NULL DEFAULT 10000,
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (tenant_id, executor_ref)
 );
+
+CREATE OR REPLACE FUNCTION capability_grade(level NUMERIC)
+RETURNS TEXT
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF level >= 4.5 THEN
+        RETURN 'CHIEF_ENGINEER';
+    ELSIF level >= 4 THEN
+        RETURN 'SENIOR_ENGINEER';
+    ELSIF level >= 3 THEN
+        RETURN 'REGISTERED_ENGINEER';
+    ELSIF level >= 2 THEN
+        RETURN 'LEAD_ENGINEER';
+    ELSE
+        RETURN 'ASSISTANT';
+    END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION compute_capability_level(
+    base_level NUMERIC,
+    pass_rate NUMERIC,
+    utxo_count INT,
+    violation_count INT,
+    penalty NUMERIC
+)
+RETURNS NUMERIC
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    level NUMERIC := COALESCE(base_level, 2);
+BEGIN
+    IF COALESCE(utxo_count, 0) >= 20 AND COALESCE(pass_rate, 0) >= 0.95 AND COALESCE(violation_count, 0) = 0 THEN
+        level := level + 0.5;
+    END IF;
+    IF COALESCE(utxo_count, 0) >= 50 THEN
+        level := level + 0.2;
+    END IF;
+    level := level + ((COALESCE(pass_rate, 0) - 0.8) * 0.8) + COALESCE(penalty, 0);
+    IF level < 0 THEN
+        level := 0;
+    END IF;
+    IF level > 5 THEN
+        level := 5;
+    END IF;
+    RETURN level;
+END;
+$$;
 
 CREATE TABLE IF NOT EXISTS resource_bindings (
     id            BIGSERIAL PRIMARY KEY,
@@ -728,7 +813,11 @@ CREATE TABLE IF NOT EXISTS resource_bindings (
     bound_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     released_at   TIMESTAMPTZ,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    
+    -- 三类资源显式绑定（用证留痕）
+    achievement_utxo_id BIGINT REFERENCES achievement_utxos(id),
+    credential_id       BIGINT REFERENCES qualifications(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_resource_bindings_project
@@ -737,4 +826,93 @@ CREATE INDEX IF NOT EXISTS idx_resource_bindings_executor
     ON resource_bindings(tenant_id, executor_ref, status, bound_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_resource_bindings_active_unique
     ON resource_bindings(tenant_id, resource_ref) WHERE status='ACTIVE';
+
+-- 用证留痕视图：三条JOIN一次性查清
+CREATE OR REPLACE VIEW credential_trace AS
+SELECT 
+    a.id AS achievement_id,
+    a.utxo_ref,
+    a.spu_ref,
+    a.project_ref,
+    a.executor_ref,
+    a.proof_hash,
+    a.status AS achievement_status,
+    a.settled_at,
+    
+    -- 使用的资质
+    q.id AS credential_id,
+    q.qual_type,
+    q.cert_no,
+    q.holder_name AS credential_holder,
+    q.status AS credential_status,
+    
+    -- 执行人员
+    a.executor_ref AS actual_executor,
+    emp.name AS executor_name,
+    COALESCE(es.capability_level, 'RISK') AS capability_level,
+    
+    -- 绑定信息
+    rb.id AS binding_id,
+    rb.bound_at,
+    rb.status AS binding_status,
+    rb.tenant_id
+    
+FROM achievement_utxos a
+LEFT JOIN resource_bindings rb ON rb.achievement_utxo_id = a.id
+LEFT JOIN qualifications q ON q.id = rb.credential_id
+LEFT JOIN executor_stats es ON es.executor_ref = a.executor_ref AND es.tenant_id = a.tenant_id
+LEFT JOIN employees emp ON emp.executor_ref = a.executor_ref
+ORDER BY a.settled_at DESC NULLS LAST;
+
+-- 资质消耗追踪：查某资质被哪些项目消耗
+CREATE OR REPLACE VIEW credential_consumption AS
+SELECT 
+    q.id AS credential_id,
+    q.qual_type,
+    q.cert_no,
+    q.holder_name AS holder_ref,
+    q.status AS credential_status,
+    q.valid_until,
+    
+    a.id AS achievement_id,
+    a.utxo_ref,
+    a.project_ref,
+    a.proof_hash,
+    a.settled_at,
+    
+    rb.bound_at,
+    rb.status AS binding_status,
+    
+    CASE WHEN q.status = 'VALID' AND q.valid_until > NOW() THEN true ELSE false END AS is_valid_at_use
+    
+FROM qualifications q
+LEFT JOIN resource_bindings rb ON rb.credential_id = q.id
+LEFT JOIN achievement_utxos a ON a.id = rb.achievement_utxo_id
+ORDER BY rb.bound_at DESC NULLS LAST;
+
+-- 人员用证汇总：查某人用了哪些证
+CREATE OR REPLACE VIEW executor_credential_usage AS
+SELECT 
+    a.executor_ref,
+    emp.name AS executor_name,
+    
+    COUNT(DISTINCT a.id) AS total_achievements,
+    COUNT(DISTINCT q.id) AS credentials_used,
+    COUNT(DISTINCT CASE WHEN a.status = 'SETTLED' THEN a.id END) AS settled_count,
+    
+    json_agg(DISTINCT json_build_object(
+        'credential_id', q.id,
+        'qual_type', q.qual_type,
+        'cert_no', q.cert_no,
+        'used_in_project', a.project_ref,
+        'used_at', rb.bound_at
+    )) FILTER (WHERE q.id IS NOT NULL) AS credential_usage,
+    
+    a.tenant_id
+    
+FROM achievement_utxos a
+LEFT JOIN resource_bindings rb ON rb.achievement_utxo_id = a.id
+LEFT JOIN qualifications q ON q.id = rb.credential_id
+LEFT JOIN employees emp ON emp.executor_ref = a.executor_ref
+GROUP BY a.executor_ref, emp.name, a.tenant_id;
 

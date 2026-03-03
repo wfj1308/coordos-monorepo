@@ -1,0 +1,87 @@
+{
+  "$schema": "https://coordos.io/schemas/spu/v1",
+  "spu_ref": "v://zhongbei/spu/contract/archive@v1",
+  "name": "Contract Archive",
+  "version": "v1",
+  "domain": "contract",
+  "stage": "CONTRACT",
+  "kind": "RECORD",
+  "status": "ACTIVE",
+  "spec_basis": ["Company Archive SOP v1"],
+  "product_unit": {
+    "deliverables": [
+      {
+        "name": "Contract archive index",
+        "format": ["JSON", "PDF"],
+        "required": true,
+        "completeness_check": ["contract_no", "archive_location", "proof_hash"]
+      }
+    ]
+  },
+  "parameter_unit": {
+    "input_parameters": {
+      "archive_class": { "label": "Archive class", "type": "enum", "values": ["LEGAL", "FINANCE", "PROJECT", "MIXED"] }
+    },
+    "derived_parameters": {},
+    "input_resource_refs": {
+      "contract_signed_utxo": {
+        "label": "Signed contract",
+        "kind": "CONTRACT_SIGNED_UTXO",
+        "required": true,
+        "fields_needed": ["contract_no", "signed_at", "counterparty"]
+      }
+    }
+  },
+  "process_unit": {
+    "total_steps": 2,
+    "steps": [
+      {
+        "seq": 1,
+        "name": "Generate archive index",
+        "skill": "contract_archive",
+        "inputs": ["contract_signed_utxo"],
+        "output_kind": "CONTRACT_ARCHIVE_INDEX_UTXO",
+        "auto_executable": true,
+        "confidence_threshold": 0.98
+      },
+      {
+        "seq": 2,
+        "name": "Bind traceability proof",
+        "skill": "document_traceability",
+        "inputs": ["contract_archive_index_utxo"],
+        "output_kind": "CONTRACT_ARCHIVED_UTXO",
+        "auto_executable": true,
+        "confidence_threshold": 1.0
+      }
+    ]
+  },
+  "executor_requirement": {
+    "capability_level": "ASSISTANT_ENGINEER",
+    "required_skills": ["contract_archive", "document_traceability"],
+    "qualification": "ROLE_DOC_CONTROLLER",
+    "energy": {
+      "kind": "LABOR",
+      "base_days": 1,
+      "range_days": [1, 2]
+    }
+  },
+  "acceptance_spec": {
+    "parameter_checks": [
+      { "check": "archive_class in [LEGAL,FINANCE,PROJECT,MIXED]", "spec_ref": "SOP:Archive", "blocking": true }
+    ],
+    "completeness_checks": ["product_unit.deliverables ALL present"],
+    "evidence_required": [
+      { "kind": "CONTRACT_ARCHIVED_UTXO", "description": "Archive completion record", "blocking": true }
+    ]
+  },
+  "utxo_state_machine": {
+    "states": ["DRAFT", "REVIEWED", "APPROVED", "DELIVERABLE"],
+    "transitions": [
+      { "from": "DRAFT", "to": "REVIEWED", "condition": "evidence_required ALL present", "auto": true },
+      { "from": "REVIEWED", "to": "APPROVED", "condition": "archive_index_verified=true", "auto": true },
+      { "from": "APPROVED", "to": "DELIVERABLE", "condition": "traceability_bound=true", "auto": true }
+    ]
+  },
+  "upstream_spu_refs": ["v://zhongbei/spu/contract/sign@v1"],
+  "downstream_spu_refs": []
+}

@@ -1,0 +1,103 @@
+{
+  "$schema": "https://coordos.io/schemas/spu/v1",
+  "spu_ref": "v://zhongbei/spu/finance/invoice@v1",
+  "name": "Invoice Issue",
+  "version": "v1",
+  "domain": "finance",
+  "stage": "FINANCE",
+  "kind": "CERT",
+  "status": "ACTIVE",
+  "spec_basis": ["VAT Law", "Company Finance SOP v1"],
+  "product_unit": {
+    "deliverables": [
+      {
+        "name": "Invoice receipt",
+        "format": ["PDF", "XML"],
+        "required": true,
+        "completeness_check": ["invoice_no", "invoice_code", "issued_at", "tax_amount"]
+      }
+    ]
+  },
+  "parameter_unit": {
+    "input_parameters": {
+      "invoice_amount": { "label": "Invoice amount", "type": "float", "unit": "CNY", "range": [0, 10000000000] },
+      "tax_rate": { "label": "Tax rate", "type": "float", "unit": "%", "range": [0, 100] }
+    },
+    "derived_parameters": {},
+    "input_resource_refs": {
+      "contract_anchor_utxo": {
+        "label": "Signed contract anchor",
+        "kind": "CONTRACT_ANCHOR_UTXO",
+        "required": true,
+        "fields_needed": ["contract_no", "counterparty", "payment_terms"]
+      },
+      "invoice_right_utxo": {
+        "label": "Invoice right",
+        "kind": "RIGHT_INVOICE",
+        "required": true,
+        "fields_needed": ["holder_ref", "authorized_scope"]
+      }
+    }
+  },
+  "process_unit": {
+    "total_steps": 3,
+    "steps": [
+      {
+        "seq": 1,
+        "name": "Invoice data check",
+        "skill": "tax_compliance",
+        "inputs": ["contract_anchor_utxo"],
+        "output_kind": "INVOICE_CHECK_UTXO",
+        "auto_executable": true,
+        "confidence_threshold": 0.95
+      },
+      {
+        "seq": 2,
+        "name": "Issue invoice",
+        "skill": "invoice_issue",
+        "inputs": ["invoice_check_utxo", "invoice_right_utxo"],
+        "output_kind": "INVOICE_ISSUED_UTXO",
+        "auto_executable": false
+      },
+      {
+        "seq": 3,
+        "name": "Send invoice notice",
+        "skill": "financial_reconciliation",
+        "inputs": ["invoice_issued_utxo"],
+        "output_kind": "INVOICE_READY_FOR_COLLECTION_UTXO",
+        "auto_executable": true,
+        "confidence_threshold": 1.0
+      }
+    ]
+  },
+  "executor_requirement": {
+    "capability_level": "ASSISTANT_ENGINEER",
+    "required_skills": ["invoice_issue", "tax_compliance"],
+    "qualification": "ROLE_ACCOUNTANT",
+    "energy": {
+      "kind": "LABOR",
+      "base_days": 1,
+      "range_days": [1, 2]
+    }
+  },
+  "acceptance_spec": {
+    "parameter_checks": [
+      { "check": "invoice_amount >= 0", "spec_ref": "SOP:Invoice", "blocking": true },
+      { "check": "tax_rate >= 0 AND tax_rate <= 100", "spec_ref": "SOP:Invoice", "blocking": true }
+    ],
+    "completeness_checks": ["product_unit.deliverables ALL present"],
+    "evidence_required": [
+      { "kind": "INVOICE_READY_FOR_COLLECTION_UTXO", "description": "Invoice ready for collection", "blocking": true }
+    ]
+  },
+  "utxo_state_machine": {
+    "states": ["DRAFT", "REVIEWED", "APPROVED", "DELIVERABLE"],
+    "transitions": [
+      { "from": "DRAFT", "to": "REVIEWED", "condition": "evidence_required ALL present", "auto": true },
+      { "from": "REVIEWED", "to": "APPROVED", "condition": "invoice_verified=true", "auto": true },
+      { "from": "APPROVED", "to": "DELIVERABLE", "condition": "invoice_dispatched=true", "auto": true }
+    ]
+  },
+  "upstream_spu_refs": ["v://zhongbei/spu/contract/sign@v1"],
+  "downstream_spu_refs": ["v://zhongbei/spu/finance/collection@v1"]
+}

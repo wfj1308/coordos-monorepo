@@ -28,6 +28,7 @@ tags:
   - name: Right
   - name: Resolve
   - name: Namespace
+  - name: Register
   - name: Publishing
   - name: Public
   - name: Bidding
@@ -667,6 +668,141 @@ paths:
             schema: {$ref: "#/components/schemas/GenericObject"}
       responses:
         "201": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/achievement/template/csv:
+    get:
+      tags: [Achievement]
+      summary: Download achievement import CSV template
+      operationId: getAchievementTemplateCSV
+      responses:
+        "200":
+          description: CSV template content
+          content:
+            text/csv:
+              schema:
+                type: string
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/achievement/verify:
+    get:
+      tags: [Achievement]
+      summary: Verify achievement or engineer receipt by ref
+      operationId: verifyAchievementByRef
+      parameters:
+        - name: ref
+          in: query
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        "404": {$ref: "#/components/responses/ErrorResponse"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/achievement/{ns}/batch/csv:
+    post:
+      tags: [Achievement]
+      summary: Batch import achievements from CSV
+      operationId: batchImportAchievementCSV
+      parameters:
+        - name: ns
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+          text/csv:
+            schema:
+              type: string
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/achievement/{ns}/batch/json:
+    post:
+      tags: [Achievement]
+      summary: Batch import achievements from JSON
+      operationId: batchImportAchievementJSON
+      parameters:
+        - name: ns
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: array
+                  items: {$ref: "#/components/schemas/GenericObject"}
+                - type: object
+                  properties:
+                    projects:
+                      type: array
+                      items: {$ref: "#/components/schemas/GenericObject"}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/achievement/{ns}:
+    get:
+      tags: [Achievement]
+      summary: Query enterprise achievement pool by namespace
+      operationId: queryAchievementPool
+      parameters:
+        - name: ns
+          in: path
+          required: true
+          schema: {type: string}
+        - name: project_type
+          in: query
+          schema: {type: string}
+        - name: min_amount
+          in: query
+          schema: {type: number}
+        - name: within_3years
+          in: query
+          schema: {type: boolean}
+        - name: within_5years
+          in: query
+          schema: {type: boolean}
+        - name: source
+          in: query
+          schema: {type: string}
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/achievement/{ns}/engineer/{id}:
+    get:
+      tags: [Achievement]
+      summary: Query engineer personal achievements by namespace and engineer ID
+      operationId: queryEngineerAchievementPool
+      parameters:
+        - name: ns
+          in: path
+          required: true
+          schema: {type: string}
+        - name: id
+          in: path
+          required: true
+          schema: {type: string}
+        - name: project_type
+          in: query
+          schema: {type: string}
+        - name: within_3years
+          in: query
+          schema: {type: boolean}
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
         default: {$ref: "#/components/responses/ErrorResponse"}
 
   # -------------------------- Right --------------------------
@@ -1390,6 +1526,102 @@ paths:
         "403": {$ref: "#/components/responses/GenericSuccess"}
         default: {$ref: "#/components/responses/ErrorResponse"}
 
+  # -------------------------- Register --------------------------
+  /api/v1/register/org:
+    post:
+      tags: [Register]
+      summary: Register organization and qualification genesis UTXOs
+      operationId: registerOrganization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GenericObject"}
+      responses:
+        "201": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/register/org/{ns}/engineers:
+    post:
+      tags: [Register]
+      summary: Import engineers in bulk from CSV/XLSX
+      operationId: importEngineers
+      parameters:
+        - name: ns
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Supports .csv and .xlsx
+                default_valid_until:
+                  type: string
+                  description: Optional YYYY-MM-DD. Defaults to 2029-12-31.
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/register/org/{ns}/executors:
+    post:
+      tags: [Register]
+      summary: Import non-engineer executors in bulk from CSV/XLSX
+      operationId: importExecutors
+      parameters:
+        - name: ns
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Supports .csv and .xlsx
+                default_valid_until:
+                  type: string
+                  description: Optional YYYY-MM-DD. Defaults to 2029-12-31.
+                default_max_concurrent_tasks:
+                  type: integer
+                  description: Optional default max concurrent tasks when the row does not provide it.
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/register/cert/extract:
+    post:
+      tags: [Register]
+      summary: Extract certificate fields from uploaded image/PDF
+      operationId: extractCertificate
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
   /api/v1/publishing/review-cert:
     post:
       tags: [Publishing]
@@ -1511,6 +1743,25 @@ paths:
         "200": {$ref: "#/components/responses/GenericSuccess"}
         default: {$ref: "#/components/responses/ErrorResponse"}
 
+  /public/v1/partner-profile/{namespace}:
+    get:
+      tags: [Public]
+      summary: Partner-facing capability declaration profile
+      operationId: publicPartnerProfile
+      parameters:
+        - name: namespace
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Four-layer partner profile for collaboration entry.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PartnerProfile"
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
   /api/v1/bidding/profiles:
     post:
       tags: [Bidding]
@@ -1629,6 +1880,104 @@ paths:
         "200": {$ref: "#/components/responses/GenericSuccess"}
         default: {$ref: "#/components/responses/ErrorResponse"}
 
+  /api/v1/capability/violations:
+    post:
+      tags: [Capability]
+      summary: Record executor violation
+      operationId: createCapabilityViolation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GenericObject"}
+      responses:
+        "201": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+    get:
+      tags: [Capability]
+      summary: List violation history by query ref
+      operationId: listCapabilityViolationsByQuery
+      parameters:
+        - name: ref
+          in: query
+          required: true
+          schema: {type: string}
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/capability/violations/{ref}:
+    get:
+      tags: [Capability]
+      summary: List violation history by executor ref
+      operationId: listCapabilityViolationsByRef
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          schema: {type: string}
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/capability/stats/{ref}:
+    get:
+      tags: [Capability]
+      summary: Get executor capability stats snapshot
+      operationId: getCapabilityStatsByRef
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/capability/stats:
+    get:
+      tags: [Capability]
+      summary: Get executor capability stats snapshot by query ref
+      operationId: getCapabilityStatsByQuery
+      parameters:
+        - name: ref
+          in: query
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/capability/compute:
+    post:
+      tags: [Capability]
+      summary: Trigger full capability stats recomputation
+      operationId: computeCapabilityStats
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/capability/org/{ns}:
+    get:
+      tags: [Capability]
+      summary: Get org capability graph snapshot
+      operationId: getOrgCapabilityGraph
+      parameters:
+        - name: ns
+          in: path
+          required: true
+          schema: {type: string}
+        - name: deep
+          in: query
+          schema: {type: boolean}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
   /api/v1/resource-bindings:
     post:
       tags: [ResourceBinding]
@@ -1725,6 +2074,118 @@ components:
       properties:
         error: {type: string}
       required: [error]
+    PartnerProfile:
+      type: object
+      required:
+        [
+          tenant_id,
+          tenant_ref,
+          target_audience,
+          launch_entries,
+          generated_at,
+          qualification_layer,
+          capability_layer,
+          achievement_layer,
+          capacity_layer,
+        ]
+      properties:
+        tenant_id: {type: integer}
+        tenant_ref: {type: string}
+        target_audience: {type: string}
+        launch_entries:
+          type: array
+          items: {type: string}
+        generated_at: {type: string, format: date-time}
+        qualification_layer:
+          type: object
+          required: [items, count]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/PartnerQualificationItem"
+            count: {type: integer}
+        capability_layer:
+          $ref: "#/components/schemas/PartnerCapabilityLayer"
+        achievement_layer:
+          type: object
+          required: [years, items, count]
+          properties:
+            years: {type: integer}
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/PartnerAchievementSummary"
+            count: {type: integer}
+        capacity_layer:
+          $ref: "#/components/schemas/PartnerCapacityLayer"
+    PartnerQualificationItem:
+      type: object
+      required: [qual_type, label, cert_no]
+      properties:
+        qual_type: {type: string}
+        label: {type: string}
+        cert_no: {type: string}
+        specialty: {type: string}
+        scope: {type: string}
+        verify_url: {type: string}
+        issued_by: {type: string}
+        level: {type: string}
+        source_url: {type: string}
+        updated_at: {type: string, format: date-time}
+        genesis_ref: {type: string}
+        credit_code: {type: string}
+        valid_until: {type: string}
+        rule_binding:
+          type: array
+          items: {type: string}
+    PartnerCapabilityLayer:
+      type: object
+      required:
+        [spu_types, spu_type_count, executable_executor_count, registered_engineer_count, qualification_type_counts, average_capability_level, executions_last_1y]
+      properties:
+        spu_types:
+          type: array
+          items: {type: string}
+        spu_type_count: {type: integer}
+        executable_executor_count: {type: integer}
+        registered_engineer_count: {type: integer}
+        qualification_type_counts:
+          type: object
+          additionalProperties:
+            type: integer
+        average_capability_level: {type: string}
+        executions_last_1y: {type: integer}
+    PartnerAchievementSummary:
+      type: object
+      required: [project_ref, settled_utxo_count, proof_hashes]
+      properties:
+        project_ref: {type: string}
+        settled_utxo_count: {type: integer}
+        latest_settled_at: {type: string, format: date-time}
+        proof_hashes:
+          type: array
+          items: {type: string}
+    PartnerCapacityLayer:
+      type: object
+      required: [in_hand_project_count, total_capacity_limit, remaining_capacity, by_specialty]
+      properties:
+        in_hand_project_count: {type: integer}
+        total_capacity_limit: {type: integer}
+        remaining_capacity: {type: integer}
+        by_specialty:
+          type: array
+          items:
+            $ref: "#/components/schemas/PartnerSpecialtyCapacity"
+    PartnerSpecialtyCapacity:
+      type: object
+      required: [specialty, qualified_executors, capacity_limit, occupied_estimate, remaining_capacity]
+      properties:
+        specialty: {type: string}
+        qualified_executors: {type: integer}
+        capacity_limit: {type: integer}
+        occupied_estimate: {type: integer}
+        remaining_capacity: {type: integer}
   responses:
     GenericSuccess:
       description: Success response

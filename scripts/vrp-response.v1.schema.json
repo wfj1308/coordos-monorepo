@@ -1,0 +1,61 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "VRP Response",
+  "description": "Standard response format for the v:// Resolution Protocol (VRP) v1.",
+  "type": "object",
+  "properties": {
+    "addr": {
+      "description": "The resolved v:// address.",
+      "type": "string",
+      "pattern": "^v://.+"
+    },
+    "type": {
+      "description": "The type of the resolved resource (e.g., achievement_utxo, genesis_utxo, executor).",
+      "type": "string"
+    },
+    "payload": {
+      "description": "The actual content of the resource.",
+      "type": "object"
+    },
+    "proof_hash": {
+      "description": "The SHA256 proof hash of the payload, as stored in the resolver's database.",
+      "type": "string",
+      "pattern": "^(sha256:)?[0-9a-f]{64}$"
+    },
+    "anchor": {
+      "description": "The Layer 0 blockchain anchor information for the proof_hash.",
+      "type": "object",
+      "properties": {
+        "chain": {
+          "description": "The blockchain identifier (e.g., ethereum, polygon_amoy).",
+          "type": "string"
+        },
+        "tx_hash": {
+          "description": "The transaction hash of the anchor.",
+          "type": "string"
+        },
+        "block": {
+          "description": "The block number containing the anchor transaction.",
+          "type": "integer"
+        },
+        "confirmed_at": {
+          "description": "The timestamp when the anchor was confirmed.",
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["chain", "tx_hash", "block"]
+    },
+    "resolver": {
+      "description": "The v:// address of the resolver node that provided this response.",
+      "type": "string",
+      "pattern": "^v://.+"
+    },
+    "ttl": {
+      "description": "Suggested time-to-live for caching this response, in seconds.",
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "required": ["addr", "type", "payload", "proof_hash", "resolver"]
+}

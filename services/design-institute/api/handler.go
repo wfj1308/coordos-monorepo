@@ -1,20 +1,27 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"mime"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"coordos/design-institute/achievement"
 	"coordos/design-institute/achievementprofile"
 	"coordos/design-institute/approve"
+	"coordos/design-institute/bid"
 	"coordos/design-institute/bidding"
+	"coordos/design-institute/capability"
 	"coordos/design-institute/company"
 	"coordos/design-institute/compliance"
 	"coordos/design-institute/contract"
@@ -28,11 +35,14 @@ import (
 	"coordos/design-institute/publicapi"
 	"coordos/design-institute/publishing"
 	"coordos/design-institute/qualification"
+	"coordos/design-institute/register"
 	"coordos/design-institute/report"
 	"coordos/design-institute/resolve"
 	"coordos/design-institute/resourcebinding"
+	"coordos/design-institute/review_publish"
 	"coordos/design-institute/rights"
 	"coordos/design-institute/settlement"
+	"coordos/design-institute/stepachievement"
 )
 
 type Services struct {
@@ -56,8 +66,13 @@ type Services struct {
 	Publishing         *publishing.Service
 	PublicAPI          *publicapi.Service
 	Bidding            *bidding.Service
+	Bid                *bid.Service
+	Capability         *capability.Service
 	Compliance         *compliance.Service
 	ResourceBinding    *resourcebinding.Service
+	Register           *register.Service
+	ReviewPublish      *review_publish.Service
+	StepAchievement    *stepachievement.Service
 }
 
 type Handler struct {
@@ -81,8 +96,13 @@ type Handler struct {
 	publishingSvc         *publishing.Service
 	publicAPISvc          *publicapi.Service
 	biddingSvc            *bidding.Service
+	bidSvc                *bid.Service
+	capabilitySvc         *capability.Service
 	complianceSvc         *compliance.Service
 	resourceBindingSvc    *resourcebinding.Service
+	registerSvc           *register.Service
+	reviewPublishSvc      *review_publish.Service
+	stepAchievementSvc    *stepachievement.Service
 	mux                   *http.ServeMux
 }
 
@@ -108,8 +128,13 @@ func NewHandler(s Services) *Handler {
 		publishingSvc:         s.Publishing,
 		publicAPISvc:          s.PublicAPI,
 		biddingSvc:            s.Bidding,
+		bidSvc:                s.Bid,
+		capabilitySvc:         s.Capability,
 		complianceSvc:         s.Compliance,
 		resourceBindingSvc:    s.ResourceBinding,
+		registerSvc:           s.Register,
+		reviewPublishSvc:      s.ReviewPublish,
+		stepAchievementSvc:    s.StepAchievement,
 		mux:                   http.NewServeMux(),
 	}
 	h.registerRoutes()
@@ -189,6 +214,12 @@ func (h *Handler) registerRoutes() {
 	h.mux.HandleFunc("GET /api/v1/achievements/{id}", h.handleAchievementGet)
 	h.mux.HandleFunc("GET /api/v1/achievements", h.handleAchievementList)
 	h.mux.HandleFunc("POST /api/v1/achievements/manual", h.handleAchievementCreateManual)
+	h.mux.HandleFunc("GET /api/v1/achievement/template/csv", h.handleAchievementTemplateCSV)
+	h.mux.HandleFunc("GET /api/v1/achievement/verify", h.handleAchievementVerifyByRef)
+	h.mux.HandleFunc("POST /api/v1/achievement/{ns}/batch/csv", h.handleAchievementBatchCSV)
+	h.mux.HandleFunc("POST /api/v1/achievement/{ns}/batch/json", h.handleAchievementBatchJSON)
+	h.mux.HandleFunc("GET /api/v1/achievement/{ns}/engineer/{id}", h.handleAchievementEngineerPool)
+	h.mux.HandleFunc("GET /api/v1/achievement/{ns}", h.handleAchievementPool)
 
 	h.mux.HandleFunc("POST /api/v1/approvals", h.handleApproveSubmit)
 	h.mux.HandleFunc("POST /api/v1/approvals/act", h.handleApproveAct)
@@ -207,6 +238,7 @@ func (h *Handler) registerRoutes() {
 
 	h.mux.HandleFunc("POST /api/v1/resolve/verify", h.handleResolveVerify)
 	h.mux.HandleFunc("POST /api/v1/resolve/candidates", h.handleResolveCandidates)
+	h.mux.HandleFunc("POST /api/v1/resolve/resolve", h.handleResolveCandidates)
 	h.mux.HandleFunc("GET /api/v1/resolve/occupied/{ref}", h.handleResolveOccupied)
 	// Compatibility aliases used by external docs/tools.
 	h.mux.HandleFunc("POST /api/v1/verify/executor", h.handleResolveVerify)
@@ -225,6 +257,10 @@ func (h *Handler) registerRoutes() {
 	h.mux.HandleFunc("GET /api/v1/namespaces/get", h.handleNamespaceGet)
 	h.mux.HandleFunc("GET /api/v1/namespaces/children", h.handleNamespaceChildren)
 	h.mux.HandleFunc("GET /api/v1/namespaces/network", h.handleNamespaceNetwork)
+	h.mux.HandleFunc("POST /api/v1/register/org", h.handleRegisterOrg)
+	h.mux.HandleFunc("POST /api/v1/register/org/{ns}/engineers", h.handleRegisterEngineersImport)
+	h.mux.HandleFunc("POST /api/v1/register/org/{ns}/executors", h.handleRegisterExecutorsImport)
+	h.mux.HandleFunc("POST /api/v1/register/cert/extract", h.handleRegisterCertExtract)
 
 	h.mux.HandleFunc("POST /api/v1/publishing/review-cert", h.handlePublishingIssueReviewCert)
 	h.mux.HandleFunc("POST /api/v1/publishing/publish", h.handlePublishingPublish)
@@ -234,19 +270,63 @@ func (h *Handler) registerRoutes() {
 	// Query alias for refs that include "/".
 	h.mux.HandleFunc("GET /api/v1/publishing/projects/drawings", h.handlePublishingProjectDrawings)
 
+	// Review & Publish Center (审图与出版中心)
+	h.mux.HandleFunc("POST /api/v1/review/verify", h.handleReviewVerify)
+	h.mux.HandleFunc("POST /api/v1/review/seal", h.handleReviewSeal)
+	h.mux.HandleFunc("POST /api/v1/publish/verify", h.handlePublishVerify)
+	h.mux.HandleFunc("POST /api/v1/publish/drawing", h.handlePublishDrawing)
+
 	h.mux.HandleFunc("GET /public/v1/capabilities", h.handlePublicCapabilities)
 	h.mux.HandleFunc("GET /public/v1/products", h.handlePublicProducts)
 	h.mux.HandleFunc("GET /public/v1/achievements", h.handlePublicAchievements)
+	h.mux.HandleFunc("GET /public/v1/partner-profile/{namespace}", h.handlePublicPartnerProfile)
+	h.mux.HandleFunc("GET /public/v1/verify/achievement/{proof_hash}", h.handlePublicVerifyAchievement)
 
 	h.mux.HandleFunc("POST /api/v1/bidding/profiles", h.handleBiddingProfileCreate)
 	h.mux.HandleFunc("GET /api/v1/bidding/profiles", h.handleBiddingProfileList)
 	h.mux.HandleFunc("GET /api/v1/bidding/profiles/{id}", h.handleBiddingProfileGet)
 	h.mux.HandleFunc("PUT /api/v1/bidding/profiles/{id}/publish", h.handleBiddingProfilePublish)
 
+	// Bid chain (投标闭环)
+	h.mux.HandleFunc("POST /api/v1/tender/{ns}", h.handleTenderCreate)
+	h.mux.HandleFunc("POST /api/v1/bid/validate", h.handleBidValidate)
+	h.mux.HandleFunc("POST /api/v1/bid", h.handleBidCreate)
+	h.mux.HandleFunc("GET /api/v1/bid/{id}", h.handleBidGet)
+	h.mux.HandleFunc("POST /api/v1/bid/{id}/submit", h.handleBidSubmit)
+	h.mux.HandleFunc("POST /api/v1/bid/{id}/award", h.handleBidAward)
+	h.mux.HandleFunc("GET /api/v1/bid/achievements/{namespace}", h.handleBidAchievements)
+	h.mux.HandleFunc("GET /api/v1/bid/pool/{namespace}", h.handleBidPool)
+
+	// Bid as executor addressing (投标作为执行体寻址)
+	h.mux.HandleFunc("POST /api/v1/bid/verify", h.handleBidVerify)
+	h.mux.HandleFunc("GET /api/v1/bid/recommend/{namespace}", h.handleBidRecommend)
+	h.mux.HandleFunc("GET /api/v1/bid/capability/{executor_ref}", h.handleBidCapability)
+	h.mux.HandleFunc("GET /api/v1/bid/match-achievements/{executor_ref}", h.handleBidMatchAchievements)
+	h.mux.HandleFunc("POST /api/v1/step-achievements", h.handleStepAchievementCreate)
+	h.mux.HandleFunc("POST /api/v1/step-achievements/sign", h.handleStepAchievementSign)
+	h.mux.HandleFunc("GET /api/v1/step-achievements", h.handleStepAchievementListByProject)
+	h.mux.HandleFunc("GET /api/v1/step-achievements/progress", h.handleStepAchievementProgress)
+
+	// Credential trace (用证留痕)
+	h.mux.HandleFunc("GET /api/v1/credential-trace/{achievement_id}", h.handleCredentialTraceGet)
+	h.mux.HandleFunc("POST /api/v1/credential-trace", h.handleCredentialTraceCreate)
+
 	h.mux.HandleFunc("POST /api/v1/violations", h.handleViolationCreate)
 	h.mux.HandleFunc("GET /api/v1/violations", h.handleViolationList)
 	h.mux.HandleFunc("GET /api/v1/executors/{ref}/stats", h.handleExecutorStatsGet)
 	h.mux.HandleFunc("GET /api/v1/executors/stats", h.handleExecutorStatsGet)
+	h.mux.HandleFunc("POST /api/v1/capability/violations", h.handleCapabilityViolationCreate)
+	h.mux.HandleFunc("GET /api/v1/capability/violations", h.handleCapabilityViolationsByRef)
+	h.mux.HandleFunc("GET /api/v1/capability/violations/{ref}", h.handleCapabilityViolationsByRef)
+	h.mux.HandleFunc("GET /api/v1/capability/stats", h.handleCapabilityStatsByRef)
+	h.mux.HandleFunc("GET /api/v1/capability/stats/{ref}", h.handleCapabilityStatsByRef)
+	h.mux.HandleFunc("POST /api/v1/capability/compute", h.handleCapabilityCompute)
+	h.mux.HandleFunc("GET /api/v1/capability/org/{ns}", h.handleCapabilityOrg)
+	h.mux.HandleFunc("GET /api/v1/capability/org", h.handleCapabilityOrg)
+
+	// VRP (v:// Resolution Protocol) Endpoint
+	h.mux.HandleFunc("GET /vlink/resolve", h.handleVLinkResolve)
+	h.mux.HandleFunc("POST /vlink/resolve/batch", h.handleVLinkResolveBatch)
 
 	h.mux.HandleFunc("POST /api/v1/resource-bindings", h.handleResourceBindingCreate)
 	h.mux.HandleFunc("GET /api/v1/resource-bindings", h.handleResourceBindingList)
@@ -359,8 +439,13 @@ func (h *Handler) handleProjectStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := h.projectSvc.Transition(r.Context(), ref, project.Status(body.Status)); err != nil {
+	targetStatus := project.Status(body.Status)
+	if err := h.projectSvc.Transition(r.Context(), ref, targetStatus); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, err := h.autoSettleProjectAchievementsIfNeeded(r.Context(), ref, targetStatus); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("project status updated but auto-settle failed: %v", err))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -491,10 +576,13 @@ func (h *Handler) handleProjectEvidencePack(w http.ResponseWriter, r *http.Reque
 	projectRights := make([]*rights.Right, 0)
 	if h.rightSvc != nil {
 		holderSet := map[string]struct{}{}
-		for _, holder := range []string{proj.OwnerRef, proj.ContractorRef, proj.ExecutorRef, proj.PlatformRef} {
-			holder = strings.TrimSpace(holder)
-			if holder != "" {
-				holderSet[holder] = struct{}{}
+		for _, holder := range []*string{proj.OwnerRef, proj.ContractorRef, proj.ExecutorRef, proj.PlatformRef} {
+			if holder == nil {
+				continue
+			}
+			h := strings.TrimSpace(*holder)
+			if h != "" {
+				holderSet[h] = struct{}{}
 			}
 		}
 		for _, it := range achievements {
@@ -1495,6 +1583,248 @@ func (h *Handler) handleAchievementCreateManual(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusCreated, out)
 }
 
+func (h *Handler) handleAchievementBatchCSV(w http.ResponseWriter, r *http.Request) {
+	if h.achievementSvc == nil {
+		writeError(w, http.StatusNotImplemented, "achievement service is disabled")
+		return
+	}
+	ns := strings.TrimSpace(r.PathValue("ns"))
+	if ns == "" {
+		ns = strings.TrimSpace(queryString(r, "ns"))
+	}
+	if ns == "" {
+		writeError(w, http.StatusBadRequest, "missing namespace")
+		return
+	}
+
+	var content []byte
+	contentType := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type")))
+	if strings.Contains(contentType, "multipart/form-data") {
+		if err := r.ParseMultipartForm(32 << 20); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid multipart form")
+			return
+		}
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "missing file")
+			return
+		}
+		defer file.Close()
+		content, err = readUploadedFileWithLimit(file, maxRegisterUploadBytes)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := validateAchievementCSVUpload(header.Filename, header.Header.Get("Content-Type"), content); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	} else {
+		var err error
+		content, err = readUploadedFileWithLimit(r.Body, maxRegisterUploadBytes)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := validateAchievementCSVUpload("achievements.csv", r.Header.Get("Content-Type"), content); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+
+	out, err := h.achievementSvc.BatchImportCSV(r.Context(), ns, bytes.NewReader(content))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) handleAchievementBatchJSON(w http.ResponseWriter, r *http.Request) {
+	if h.achievementSvc == nil {
+		writeError(w, http.StatusNotImplemented, "achievement service is disabled")
+		return
+	}
+	ns := strings.TrimSpace(r.PathValue("ns"))
+	if ns == "" {
+		ns = strings.TrimSpace(queryString(r, "ns"))
+	}
+	if ns == "" {
+		writeError(w, http.StatusBadRequest, "missing namespace")
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 20<<20))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "read request body failed")
+		return
+	}
+	out, err := h.achievementSvc.BatchImportJSON(r.Context(), ns, body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) handleAchievementPool(w http.ResponseWriter, r *http.Request) {
+	if h.achievementSvc == nil {
+		writeError(w, http.StatusNotImplemented, "achievement service is disabled")
+		return
+	}
+	ns := strings.TrimSpace(r.PathValue("ns"))
+	if ns == "" {
+		ns = strings.TrimSpace(queryString(r, "ns"))
+	}
+	if ns == "" {
+		writeError(w, http.StatusBadRequest, "missing namespace")
+		return
+	}
+
+	limit := 100
+	if v := strings.TrimSpace(queryString(r, "limit")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid limit")
+			return
+		}
+		limit = n
+	}
+	offset := 0
+	if v := strings.TrimSpace(queryString(r, "offset")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			writeError(w, http.StatusBadRequest, "invalid offset")
+			return
+		}
+		offset = n
+	}
+
+	minAmount := 0.0
+	if v := strings.TrimSpace(queryString(r, "min_amount")); v != "" {
+		f, err := strconv.ParseFloat(v, 64)
+		if err != nil || f < 0 {
+			writeError(w, http.StatusBadRequest, "invalid min_amount")
+			return
+		}
+		minAmount = f
+	}
+	within3Years := strings.EqualFold(strings.TrimSpace(queryString(r, "within_3years")), "true")
+	within5Years := strings.EqualFold(strings.TrimSpace(queryString(r, "within_5years")), "true")
+
+	items, total, err := h.achievementSvc.QueryAchievementPool(r.Context(), achievement.LibraryQueryFilter{
+		NamespaceRef: ns,
+		ProjectType:  strings.TrimSpace(queryString(r, "project_type")),
+		MinAmount:    minAmount,
+		Within3Years: within3Years,
+		Within5Years: within5Years,
+		Source:       strings.TrimSpace(queryString(r, "source")),
+		Limit:        limit,
+		Offset:       offset,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"namespace_ref": ns,
+		"items":         items,
+		"total":         total,
+		"limit":         limit,
+		"offset":        offset,
+	})
+}
+
+func (h *Handler) handleAchievementEngineerPool(w http.ResponseWriter, r *http.Request) {
+	if h.achievementSvc == nil {
+		writeError(w, http.StatusNotImplemented, "achievement service is disabled")
+		return
+	}
+	ns := strings.TrimSpace(r.PathValue("ns"))
+	if ns == "" {
+		ns = strings.TrimSpace(queryString(r, "ns"))
+	}
+	engID := strings.TrimSpace(r.PathValue("id"))
+	if engID == "" {
+		engID = strings.TrimSpace(queryString(r, "id"))
+	}
+	if ns == "" || engID == "" {
+		writeError(w, http.StatusBadRequest, "missing namespace or engineer id")
+		return
+	}
+
+	limit := 100
+	if v := strings.TrimSpace(queryString(r, "limit")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid limit")
+			return
+		}
+		limit = n
+	}
+	offset := 0
+	if v := strings.TrimSpace(queryString(r, "offset")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			writeError(w, http.StatusBadRequest, "invalid offset")
+			return
+		}
+		offset = n
+	}
+	within3Years := strings.EqualFold(strings.TrimSpace(queryString(r, "within_3years")), "true")
+
+	items, total, err := h.achievementSvc.QueryEngineerAchievementPool(
+		r.Context(),
+		ns,
+		engID,
+		strings.TrimSpace(queryString(r, "project_type")),
+		within3Years,
+		limit,
+		offset,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"namespace_ref": ns,
+		"engineer_id":   engID,
+		"items":         items,
+		"total":         total,
+		"limit":         limit,
+		"offset":        offset,
+	})
+}
+
+func (h *Handler) handleAchievementVerifyByRef(w http.ResponseWriter, r *http.Request) {
+	if h.achievementSvc == nil {
+		writeError(w, http.StatusNotImplemented, "achievement service is disabled")
+		return
+	}
+	ref := strings.TrimSpace(queryString(r, "ref"))
+	if ref == "" {
+		writeError(w, http.StatusBadRequest, "missing ref")
+		return
+	}
+	out, err := h.achievementSvc.VerifyLibraryRef(r.Context(), ref)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) handleAchievementTemplateCSV(w http.ResponseWriter, _ *http.Request) {
+	content := achievement.GenerateAchievementCSVTemplate()
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="achievement_import_template.csv"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, content)
+}
+
 func (h *Handler) autoArchiveAfterReviewChain(ctx context.Context, projectRef, spuRef string) error {
 	if h.projectSvc == nil || projectRef == "" || !isReviewChainCompleteSPU(spuRef) {
 		return nil
@@ -1507,8 +1837,25 @@ func (h *Handler) autoArchiveAfterReviewChain(ctx context.Context, projectRef, s
 		if err := h.projectSvc.Transition(ctx, projectRef, target); err != nil {
 			return err
 		}
+		if _, err := h.autoSettleProjectAchievementsIfNeeded(ctx, projectRef, target); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func (h *Handler) autoSettleProjectAchievementsIfNeeded(
+	ctx context.Context,
+	projectRef string,
+	status project.Status,
+) (int64, error) {
+	if h.achievementSvc == nil || projectRef == "" {
+		return 0, nil
+	}
+	if status != project.StatusSettled && status != project.StatusArchived {
+		return 0, nil
+	}
+	return h.achievementSvc.AutoSettleProject(ctx, projectRef)
 }
 
 func isReviewChainCompleteSPU(spuRef string) bool {
@@ -1794,6 +2141,7 @@ func (h *Handler) handleResolveCandidates(w http.ResponseWriter, r *http.Request
 	}
 	var body struct {
 		Tenant         string         `json:"tenant"`
+		TenantID       int            `json:"tenant_id"`
 		ProjectRef     string         `json:"project_ref"`
 		SPURef         string         `json:"spu_ref"`
 		Role           string         `json:"role"`
@@ -1801,6 +2149,7 @@ func (h *Handler) handleResolveCandidates(w http.ResponseWriter, r *http.Request
 		HeadOfficeOnly bool           `json:"head_office_only"`
 		ValidOn        string         `json:"valid_on"`
 		Limit          int            `json:"limit"`
+		RequiredQuals  []string       `json:"required_quals"`
 		Constraints    struct {
 			NeedsCompanyQualTypes []string `json:"needs_company_qual_types"`
 			NeedsPersonQualTypes  []string `json:"needs_person_qual_types"`
@@ -1819,7 +2168,10 @@ func (h *Handler) handleResolveCandidates(w http.ResponseWriter, r *http.Request
 		Action:         body.Action,
 		HeadOfficeOnly: body.HeadOfficeOnly,
 		Limit:          body.Limit,
-		NeedQualTypes:  parseResolveConstraintQualTypes(body.Constraints.NeedsCompanyQualTypes, body.Constraints.NeedsPersonQualTypes),
+		NeedQualTypes: parseResolveConstraintQualTypes(
+			body.Constraints.NeedsCompanyQualTypes,
+			append(body.Constraints.NeedsPersonQualTypes, body.RequiredQuals...),
+		),
 	}
 	validOn := strings.TrimSpace(body.ValidOn)
 	if validOn == "" {
@@ -2067,6 +2419,363 @@ func (h *Handler) handleNamespaceRoute(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusForbidden, out)
 }
 
+func (h *Handler) handleRegisterOrg(w http.ResponseWriter, r *http.Request) {
+	if h.registerSvc == nil {
+		writeError(w, http.StatusNotImplemented, "register service is disabled")
+		return
+	}
+	var in register.RegisterOrgInput
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	out, err := h.registerSvc.RegisterOrg(r.Context(), in)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, out)
+}
+
+const maxRegisterUploadBytes int64 = 20 << 20
+
+func readUploadedFileWithLimit(file io.Reader, maxBytes int64) ([]byte, error) {
+	content, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read file failed")
+	}
+	if int64(len(content)) > maxBytes {
+		return nil, fmt.Errorf("file too large (max %dMB)", maxBytes/(1<<20))
+	}
+	if len(content) == 0 {
+		return nil, fmt.Errorf("empty file")
+	}
+	return content, nil
+}
+
+func normalizeMediaType(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	mediaType, _, err := mime.ParseMediaType(raw)
+	if err != nil {
+		return strings.ToLower(raw)
+	}
+	return strings.ToLower(strings.TrimSpace(mediaType))
+}
+
+func isGenericBinaryMediaType(mediaType string) bool {
+	return mediaType == "" || mediaType == "application/octet-stream"
+}
+
+func isSpreadsheetMediaType(mediaType string) bool {
+	switch mediaType {
+	case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+		"application/vnd.ms-excel",
+		"application/zip":
+		return true
+	default:
+		return false
+	}
+}
+
+func isCSVMediaType(mediaType string) bool {
+	switch mediaType {
+	case "text/csv", "text/plain", "application/csv", "application/vnd.ms-excel", "text/tab-separated-values":
+		return true
+	default:
+		return false
+	}
+}
+
+func looksLikeZipContent(raw []byte) bool {
+	return len(raw) >= 2 && raw[0] == 'P' && raw[1] == 'K'
+}
+
+func looksLikePDFContent(raw []byte) bool {
+	return len(raw) >= 5 && bytes.Equal(raw[:5], []byte("%PDF-"))
+}
+
+func validateRegisterSheetUpload(fileName, partContentType string, content []byte) (string, error) {
+	ext := strings.ToLower(strings.TrimSpace(filepath.Ext(fileName)))
+	if ext != ".csv" && ext != ".xlsx" {
+		return "", fmt.Errorf("unsupported file type: only .csv/.xlsx are allowed")
+	}
+
+	declaredType := normalizeMediaType(partContentType)
+	detectedType := normalizeMediaType(http.DetectContentType(content))
+
+	switch ext {
+	case ".xlsx":
+		if !looksLikeZipContent(content) {
+			return "", fmt.Errorf("invalid xlsx content")
+		}
+		if declaredType != "" && !isSpreadsheetMediaType(declaredType) && !isGenericBinaryMediaType(declaredType) {
+			return "", fmt.Errorf("content-type mismatch for xlsx")
+		}
+		if detectedType != "" && !isSpreadsheetMediaType(detectedType) && !isGenericBinaryMediaType(detectedType) {
+			return "", fmt.Errorf("file content is not xlsx")
+		}
+		return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", nil
+	case ".csv":
+		if looksLikeZipContent(content) || looksLikePDFContent(content) || strings.HasPrefix(detectedType, "image/") {
+			return "", fmt.Errorf("file content is not csv")
+		}
+		if declaredType != "" && !isCSVMediaType(declaredType) && !isGenericBinaryMediaType(declaredType) {
+			return "", fmt.Errorf("content-type mismatch for csv")
+		}
+		return "text/csv", nil
+	default:
+		return "", fmt.Errorf("unsupported file type")
+	}
+}
+
+func validateAchievementCSVUpload(fileName, partContentType string, content []byte) error {
+	ext := strings.ToLower(strings.TrimSpace(filepath.Ext(fileName)))
+	if ext != "" && ext != ".csv" {
+		return fmt.Errorf("unsupported file type: only .csv is allowed")
+	}
+	declaredType := normalizeMediaType(partContentType)
+	detectedType := normalizeMediaType(http.DetectContentType(content))
+	if looksLikeZipContent(content) || looksLikePDFContent(content) || strings.HasPrefix(detectedType, "image/") {
+		return fmt.Errorf("file content is not csv")
+	}
+	if declaredType != "" && !isCSVMediaType(declaredType) && !isGenericBinaryMediaType(declaredType) {
+		return fmt.Errorf("content-type mismatch for csv")
+	}
+	return nil
+}
+
+func certImageMediaTypeFromExt(ext string) string {
+	switch ext {
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".webp":
+		return "image/webp"
+	case ".gif":
+		return "image/gif"
+	case ".bmp":
+		return "image/bmp"
+	case ".tif", ".tiff":
+		return "image/tiff"
+	default:
+		return ""
+	}
+}
+
+func isAllowedCertImageMediaType(mediaType string) bool {
+	switch mediaType {
+	case "image/jpeg", "image/png", "image/webp", "image/gif", "image/bmp", "image/x-ms-bmp", "image/tiff":
+		return true
+	default:
+		return false
+	}
+}
+
+func validateRegisterCertUpload(fileName, partContentType string, content []byte) (string, error) {
+	ext := strings.ToLower(strings.TrimSpace(filepath.Ext(fileName)))
+	declaredType := normalizeMediaType(partContentType)
+	detectedType := normalizeMediaType(http.DetectContentType(content))
+
+	if looksLikePDFContent(content) || declaredType == "application/pdf" || detectedType == "application/pdf" || ext == ".pdf" {
+		if !looksLikePDFContent(content) {
+			return "", fmt.Errorf("invalid pdf content")
+		}
+		return "application/pdf", nil
+	}
+
+	if isAllowedCertImageMediaType(detectedType) {
+		return detectedType, nil
+	}
+	if isAllowedCertImageMediaType(declaredType) {
+		return declaredType, nil
+	}
+	if extType := certImageMediaTypeFromExt(ext); extType != "" && isGenericBinaryMediaType(detectedType) {
+		return extType, nil
+	}
+
+	return "", fmt.Errorf("unsupported file type: only image/pdf are allowed")
+}
+
+func (h *Handler) handleRegisterEngineersImport(w http.ResponseWriter, r *http.Request) {
+	if h.registerSvc == nil {
+		writeError(w, http.StatusNotImplemented, "register service is disabled")
+		return
+	}
+	ns := strings.TrimSpace(r.PathValue("ns"))
+	if ns == "" {
+		writeError(w, http.StatusBadRequest, "missing ns")
+		return
+	}
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid multipart form")
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "missing file")
+		return
+	}
+	defer file.Close()
+	content, err := readUploadedFileWithLimit(file, maxRegisterUploadBytes)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	normalizedContentType, err := validateRegisterSheetUpload(header.Filename, header.Header.Get("Content-Type"), content)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	opts := register.ImportEngineersOptions{
+		DefaultValidUntil: strings.TrimSpace(r.FormValue("default_valid_until")),
+	}
+	out, err := h.registerSvc.ImportEngineersFile(
+		r.Context(),
+		ns,
+		header.Filename,
+		normalizedContentType,
+		content,
+		opts,
+	)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	out.StatsRefreshed, out.StatsRefreshFailure = h.refreshExecutorStatsBatch(r.Context(), out.ExecutorRefs)
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) handleRegisterExecutorsImport(w http.ResponseWriter, r *http.Request) {
+	if h.registerSvc == nil {
+		writeError(w, http.StatusNotImplemented, "register service is disabled")
+		return
+	}
+	ns := strings.TrimSpace(r.PathValue("ns"))
+	if ns == "" {
+		writeError(w, http.StatusBadRequest, "missing ns")
+		return
+	}
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid multipart form")
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "missing file")
+		return
+	}
+	defer file.Close()
+	content, err := readUploadedFileWithLimit(file, maxRegisterUploadBytes)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	normalizedContentType, err := validateRegisterSheetUpload(header.Filename, header.Header.Get("Content-Type"), content)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	defaultMaxConcurrent := 0
+	if v := strings.TrimSpace(r.FormValue("default_max_concurrent_tasks")); v != "" {
+		n, convErr := strconv.Atoi(v)
+		if convErr != nil || n < 0 {
+			writeError(w, http.StatusBadRequest, "invalid default_max_concurrent_tasks")
+			return
+		}
+		defaultMaxConcurrent = n
+	}
+
+	opts := register.ImportExecutorsOptions{
+		DefaultValidUntil:         strings.TrimSpace(r.FormValue("default_valid_until")),
+		DefaultMaxConcurrentTasks: defaultMaxConcurrent,
+	}
+	out, err := h.registerSvc.ImportExecutorsFile(
+		r.Context(),
+		ns,
+		header.Filename,
+		normalizedContentType,
+		content,
+		opts,
+	)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	out.StatsRefreshed, out.StatsRefreshFailure = h.refreshExecutorStatsBatch(r.Context(), out.ExecutorRefs)
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) refreshExecutorStatsBatch(ctx context.Context, refs []string) (int, []register.StatsRefreshFailure) {
+	if h.complianceSvc == nil || len(refs) == 0 {
+		return 0, nil
+	}
+	refreshed := 0
+	failures := make([]register.StatsRefreshFailure, 0)
+	seen := make(map[string]struct{}, len(refs))
+	for _, ref := range refs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			continue
+		}
+		if _, ok := seen[ref]; ok {
+			continue
+		}
+		seen[ref] = struct{}{}
+		if _, err := h.complianceSvc.RefreshExecutorStats(ctx, ref); err != nil {
+			failures = append(failures, register.StatsRefreshFailure{
+				ExecutorRef: ref,
+				Reason:      err.Error(),
+			})
+			continue
+		}
+		refreshed++
+	}
+	return refreshed, failures
+}
+
+func (h *Handler) handleRegisterCertExtract(w http.ResponseWriter, r *http.Request) {
+	if h.registerSvc == nil {
+		writeError(w, http.StatusNotImplemented, "register service is disabled")
+		return
+	}
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid multipart form")
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "missing file")
+		return
+	}
+	defer file.Close()
+	content, err := readUploadedFileWithLimit(file, maxRegisterUploadBytes)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	normalizedContentType, err := validateRegisterCertUpload(header.Filename, header.Header.Get("Content-Type"), content)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	out, err := h.registerSvc.ExtractCert(r.Context(), register.ExtractCertInput{
+		FileName:    header.Filename,
+		ContentType: normalizedContentType,
+		FileBytes:   content,
+	})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 func (h *Handler) handlePublishingIssueReviewCert(w http.ResponseWriter, r *http.Request) {
 	if h.publishingSvc == nil {
 		writeError(w, http.StatusNotImplemented, "publishing service is disabled")
@@ -2226,6 +2935,24 @@ func (h *Handler) handlePublicAchievements(w http.ResponseWriter, r *http.Reques
 	})
 }
 
+func (h *Handler) handlePublicPartnerProfile(w http.ResponseWriter, r *http.Request) {
+	if h.publicAPISvc == nil {
+		writeError(w, http.StatusNotImplemented, "public api service is disabled")
+		return
+	}
+	namespace := r.PathValue("namespace")
+	if namespace == "" {
+		writeError(w, http.StatusBadRequest, "namespace is required")
+		return
+	}
+	out, err := h.publicAPISvc.PartnerProfileForCooperation(r.Context(), namespace)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 func (h *Handler) handleBiddingProfileCreate(w http.ResponseWriter, r *http.Request) {
 	if h.biddingSvc == nil {
 		writeError(w, http.StatusNotImplemented, "bidding service is disabled")
@@ -2383,6 +3110,108 @@ func (h *Handler) handleExecutorStatsGet(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	out, err := h.complianceSvc.GetExecutorStats(r.Context(), ref)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) handleCapabilityViolationCreate(w http.ResponseWriter, r *http.Request) {
+	if h.capabilitySvc == nil {
+		writeError(w, http.StatusNotImplemented, "capability service is disabled")
+		return
+	}
+	var in capability.RecordViolationInput
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	out, err := h.capabilitySvc.RecordViolation(r.Context(), in)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, out)
+}
+
+func (h *Handler) handleCapabilityViolationsByRef(w http.ResponseWriter, r *http.Request) {
+	if h.capabilitySvc == nil {
+		writeError(w, http.StatusNotImplemented, "capability service is disabled")
+		return
+	}
+	ref := strings.TrimSpace(queryString(r, "ref"))
+	if ref == "" {
+		ref = pathOrQueryRef(r, "ref", "ref")
+	}
+	if ref == "" {
+		writeError(w, http.StatusBadRequest, "missing ref")
+		return
+	}
+	limit, offset, err := pagination(r, 20)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	items, total, err := h.capabilitySvc.ListViolationsByExecutor(r.Context(), ref, limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items":  items,
+		"total":  total,
+		"limit":  limit,
+		"offset": offset,
+	})
+}
+
+func (h *Handler) handleCapabilityStatsByRef(w http.ResponseWriter, r *http.Request) {
+	if h.capabilitySvc == nil {
+		writeError(w, http.StatusNotImplemented, "capability service is disabled")
+		return
+	}
+	ref := strings.TrimSpace(queryString(r, "ref"))
+	if ref == "" {
+		ref = pathOrQueryRef(r, "ref", "ref")
+	}
+	if ref == "" {
+		writeError(w, http.StatusBadRequest, "missing ref")
+		return
+	}
+	out, err := h.capabilitySvc.GetStats(r.Context(), ref)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) handleCapabilityCompute(w http.ResponseWriter, r *http.Request) {
+	if h.capabilitySvc == nil {
+		writeError(w, http.StatusNotImplemented, "capability service is disabled")
+		return
+	}
+	out, err := h.capabilitySvc.ComputeStats(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) handleCapabilityOrg(w http.ResponseWriter, r *http.Request) {
+	if h.capabilitySvc == nil {
+		writeError(w, http.StatusNotImplemented, "capability service is disabled")
+		return
+	}
+	ns := pathOrQueryRef(r, "ns", "ns")
+	if ns == "" {
+		writeError(w, http.StatusBadRequest, "missing namespace")
+		return
+	}
+	deep := strings.EqualFold(strings.TrimSpace(queryString(r, "deep")), "true")
+	out, err := h.capabilitySvc.GetOrgCapacity(r.Context(), ns, deep)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -3243,6 +4072,26 @@ func parseResolveConstraintQualTypes(companyQualTypes []string, personQualTypes 
 		switch v {
 		case "", "NONE":
 			return ""
+		case "QUAL_REG_STRUCTURE", "QUAL_REG_STRUCT":
+			return qualification.QualRegStructure
+		case "QUAL_REG_ARCH":
+			return qualification.QualRegArch
+		case "QUAL_REG_CIVIL":
+			return qualification.QualRegCivil
+		case "QUAL_REG_ELECTRIC", "QUAL_REG_ELEC":
+			return qualification.QualRegElectric
+		case "QUAL_REG_MECH":
+			return qualification.QualRegMech
+		case "QUAL_REG_COST":
+			return qualification.QualRegCost
+		case "QUAL_REG_SAFETY":
+			return qualification.QualRegSafety
+		case "QUAL_COMP_COMPREHENSIVE_A":
+			return qualification.QualComprehensiveA
+		case "QUAL_INDUSTRY_ARCH_A", "QUAL_COMP_INDUSTRY_A":
+			return qualification.QualIndustryA
+		case "QUAL_COMP_INDUSTRY_B":
+			return qualification.QualIndustryB
 		case "REG_STRUCT", "REG_STRUCTURE":
 			return qualification.QualRegStructure
 		case "REG_ARCH":
@@ -3364,4 +4213,640 @@ func buildContractRef(tenantID int, contractID int64) string {
 		tenantID = 10000
 	}
 	return fmt.Sprintf("v://%d/contract/%d", tenantID, contractID)
+}
+
+func (h *Handler) handlePublicVerifyAchievement(w http.ResponseWriter, r *http.Request) {
+	proofHash := r.PathValue("proof_hash")
+	if proofHash == "" {
+		writeError(w, http.StatusBadRequest, "proof_hash is required")
+		return
+	}
+	utxo, err := h.achievementSvc.GetByProofHash(r.Context(), proofHash)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"valid":  false,
+			"error":  "proof_hash not found",
+			"detail": err.Error(),
+		})
+		return
+	}
+	node, _ := h.projectSvc.Get(r.Context(), utxo.ProjectRef)
+	projectName := ""
+	if node != nil {
+		projectName = node.Name
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"valid":        true,
+		"utxo_ref":     utxo.UTXORef,
+		"spu_ref":      utxo.SPURef,
+		"project_ref":  utxo.ProjectRef,
+		"project_name": projectName,
+		"executor_ref": utxo.ExecutorRef,
+		"status":       utxo.Status,
+		"source":       utxo.Source,
+		"settled_at":   utxo.SettledAt,
+		"ingested_at":  utxo.IngestedAt,
+	})
+}
+
+// ══════════════════════════════════════════════════════════════
+// Bid Chain (投标闭环)
+// ══════════════════════════════════════════════════════════════
+
+func (h *Handler) handleTenderCreate(w http.ResponseWriter, r *http.Request) {
+	if h.bidSvc == nil {
+		writeError(w, http.StatusNotImplemented, "bid service is disabled")
+		return
+	}
+	ns := strings.TrimSpace(r.PathValue("ns"))
+	if ns == "" {
+		writeError(w, http.StatusBadRequest, "missing namespace path param")
+		return
+	}
+	var in bid.CreateTenderInput
+	if err := decodeJSON(r, &in); err != nil && err != io.EOF {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	out, err := h.bidSvc.CreateTender(r.Context(), ns, in)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, out)
+}
+
+func (h *Handler) handleBidValidate(w http.ResponseWriter, r *http.Request) {
+	if h.bidSvc == nil {
+		writeError(w, http.StatusNotImplemented, "bid service is disabled")
+		return
+	}
+	var in bid.ValidateBidInput
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, err := h.bidSvc.ValidateBid(r.Context(), in)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) handleBidCreate(w http.ResponseWriter, r *http.Request) {
+	if h.bidSvc == nil {
+		writeError(w, http.StatusNotImplemented, "bid service is disabled")
+		return
+	}
+	var in bid.CreateBidInput
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	doc, resources, err := h.bidSvc.CreateBid(r.Context(), in)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"bid":       doc,
+		"resources": resources,
+	})
+}
+
+func (h *Handler) handleBidGet(w http.ResponseWriter, r *http.Request) {
+	if h.bidSvc == nil {
+		writeError(w, http.StatusNotImplemented, "bid service is disabled")
+		return
+	}
+	id, err := pathInt64(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	doc, resources, err := h.bidSvc.GetBid(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"bid":       doc,
+		"resources": resources,
+	})
+}
+
+func (h *Handler) handleBidSubmit(w http.ResponseWriter, r *http.Request) {
+	if h.bidSvc == nil {
+		writeError(w, http.StatusNotImplemented, "bid service is disabled")
+		return
+	}
+	id, err := pathInt64(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	if err := h.bidSvc.SubmitBid(r.Context(), id); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "submitted"})
+}
+
+func (h *Handler) handleBidAward(w http.ResponseWriter, r *http.Request) {
+	if h.bidSvc == nil {
+		writeError(w, http.StatusNotImplemented, "bid service is disabled")
+		return
+	}
+	id, err := pathInt64(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	doc, err := h.bidSvc.Award(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":      "awarded",
+		"project_ref": doc.ProjectRef,
+		"contract_id": doc.ContractID,
+		"bid":         doc,
+	})
+}
+
+// handleVLinkResolve 实现 Layer 1/Layer 2 的 v:// 协议解析端点
+func (h *Handler) handleVLinkResolve(w http.ResponseWriter, r *http.Request) {
+	if h.resolveSvc == nil {
+		writeError(w, http.StatusNotImplemented, "resolve service is disabled")
+		return
+	}
+
+	addr := queryString(r, "addr")
+	if addr == "" {
+		writeError(w, http.StatusBadRequest, "missing required 'addr' query parameter")
+		return
+	}
+
+	resp, err := h.resolveSvc.Resolve(r.Context(), addr)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if strings.Contains(err.Error(), "invalid v:// address") {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleVLinkResolveBatch supports batch resolution of v:// addresses for efficiency.
+func (h *Handler) handleVLinkResolveBatch(w http.ResponseWriter, r *http.Request) {
+	if h.resolveSvc == nil {
+		writeError(w, http.StatusNotImplemented, "resolve service is disabled")
+		return
+	}
+
+	var body struct {
+		Addrs []string `json:"addrs"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if len(body.Addrs) == 0 {
+		writeError(w, http.StatusBadRequest, "addrs array cannot be empty")
+		return
+	}
+	if len(body.Addrs) > 100 { // Prevent abuse
+		writeError(w, http.StatusBadRequest, "cannot resolve more than 100 addresses in a single batch")
+		return
+	}
+
+	results := make(map[string]interface{})
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for _, addr := range body.Addrs {
+		wg.Add(1)
+		go func(a string) {
+			defer wg.Done()
+			resp, err := h.resolveSvc.Resolve(r.Context(), a)
+
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				results[a] = map[string]string{"error": err.Error()}
+			} else {
+				results[a] = resp
+			}
+		}(addr)
+	}
+
+	wg.Wait()
+	writeJSON(w, http.StatusOK, results)
+}
+
+func (h *Handler) handleBidAchievements(w http.ResponseWriter, r *http.Request) {
+	if h.bidSvc == nil {
+		writeError(w, http.StatusNotImplemented, "bid service is disabled")
+		return
+	}
+	namespace := r.PathValue("namespace")
+	projectType := queryString(r, "project_type")
+	withinYears, _ := strconv.Atoi(queryString(r, "within_years"))
+	limit, offset, _ := pagination(r, 20)
+
+	f := bid.AchievementsFilter{
+		NamespaceRef: "v://" + namespace,
+		WithinYears:  withinYears,
+		Limit:        limit,
+		Offset:       offset,
+	}
+	if projectType != "" {
+		f.ProjectType = &projectType
+	}
+
+	list, total, err := h.bidSvc.SearchAchievements(r.Context(), f)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items": list,
+		"total": total,
+	})
+}
+
+func (h *Handler) handleBidPool(w http.ResponseWriter, r *http.Request) {
+	if h.bidSvc == nil {
+		writeError(w, http.StatusNotImplemented, "bid service is disabled")
+		return
+	}
+	namespace := r.PathValue("namespace")
+	limit, offset, _ := pagination(r, 50)
+
+	list, total, err := h.bidSvc.SearchAchievements(r.Context(), bid.AchievementsFilter{
+		NamespaceRef: "v://" + namespace,
+		WithinYears:  3,
+		Limit:        limit,
+		Offset:       offset,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"namespace": namespace,
+		"items":     list,
+		"total":     total,
+	})
+}
+
+// ── 投标作为执行体寻址 ───────────────────────────────────────
+
+func (h *Handler) handleBidVerify(w http.ResponseWriter, r *http.Request) {
+	if h.bidSvc == nil {
+		writeError(w, http.StatusNotImplemented, "bid service is disabled")
+		return
+	}
+	var in bid.ValidateBidInput
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, err := h.bidSvc.VerifyBid(r.Context(), in)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) handleBidRecommend(w http.ResponseWriter, r *http.Request) {
+	if h.bidSvc == nil {
+		writeError(w, http.StatusNotImplemented, "bid service is disabled")
+		return
+	}
+	namespace := r.PathValue("namespace")
+	spuRef := queryString(r, "spu_ref")
+	limit, _ := strconv.Atoi(queryString(r, "limit"))
+	if limit == 0 {
+		limit = 10
+	}
+
+	candidates, err := h.bidSvc.RecommendTeam(r.Context(), "v://"+namespace, spuRef, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"namespace":  namespace,
+		"target_spu": spuRef,
+		"candidates": candidates,
+		"count":      len(candidates),
+	})
+}
+
+func (h *Handler) handleBidCapability(w http.ResponseWriter, r *http.Request) {
+	if h.bidSvc == nil {
+		writeError(w, http.StatusNotImplemented, "bid service is disabled")
+		return
+	}
+	executorRef := r.PathValue("executor_ref")
+	if executorRef == "" {
+		writeError(w, http.StatusBadRequest, "executor_ref required")
+		return
+	}
+	targetSPU := queryString(r, "target_spu")
+
+	proof, err := h.bidSvc.GenerateCapabilityProof(r.Context(), executorRef, targetSPU)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, proof)
+}
+
+func (h *Handler) handleBidMatchAchievements(w http.ResponseWriter, r *http.Request) {
+	if h.bidSvc == nil {
+		writeError(w, http.StatusNotImplemented, "bid service is disabled")
+		return
+	}
+	executorRef := r.PathValue("executor_ref")
+	projectType := queryString(r, "project_type")
+	withinYears, _ := strconv.Atoi(queryString(r, "within_years"))
+	if withinYears == 0 {
+		withinYears = 3
+	}
+	minAmount, _ := strconv.ParseFloat(queryString(r, "min_amount"), 64)
+	limit, _ := strconv.Atoi(queryString(r, "limit"))
+	if limit == 0 {
+		limit = 10
+	}
+
+	matches, err := h.bidSvc.MatchAchievements(r.Context(), executorRef, projectType, withinYears, minAmount, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"executor_ref": executorRef,
+		"project_type": projectType,
+		"matches":      matches,
+		"count":        len(matches),
+	})
+}
+
+// ── 用证留痕 ─────────────────────────────────────────────────
+
+func (h *Handler) handleStepAchievementCreate(w http.ResponseWriter, r *http.Request) {
+	if h.stepAchievementSvc == nil {
+		writeError(w, http.StatusNotImplemented, "step achievement service is disabled")
+		return
+	}
+	var in stepachievement.CreateInput
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if strings.TrimSpace(in.NamespaceRef) == "" {
+		in.NamespaceRef = strings.TrimSpace(queryString(r, "namespace_ref"))
+	}
+	if in.TenantID == 0 {
+		in.TenantID = h.stepAchievementSvc.TenantID()
+	}
+	out, err := h.stepAchievementSvc.Create(r.Context(), in)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, out)
+}
+
+func (h *Handler) handleStepAchievementSign(w http.ResponseWriter, r *http.Request) {
+	if h.stepAchievementSvc == nil {
+		writeError(w, http.StatusNotImplemented, "step achievement service is disabled")
+		return
+	}
+	var in stepachievement.SignInput
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if strings.TrimSpace(in.Ref) == "" {
+		writeError(w, http.StatusBadRequest, "ref is required")
+		return
+	}
+	if strings.TrimSpace(in.ProjectRef) == "" {
+		if step, err := h.stepAchievementSvc.Get(r.Context(), in.Ref); err == nil {
+			in.ProjectRef = step.ProjectRef
+		}
+	}
+	out, err := h.stepAchievementSvc.Sign(r.Context(), in)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) handleStepAchievementListByProject(w http.ResponseWriter, r *http.Request) {
+	if h.stepAchievementSvc == nil {
+		writeError(w, http.StatusNotImplemented, "step achievement service is disabled")
+		return
+	}
+	projectRef := strings.TrimSpace(queryString(r, "project_ref"))
+	if projectRef == "" {
+		writeError(w, http.StatusBadRequest, "project_ref is required")
+		return
+	}
+	items, err := h.stepAchievementSvc.ListByProject(r.Context(), projectRef)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"project_ref": projectRef,
+		"items":       items,
+		"count":       len(items),
+	})
+}
+
+func (h *Handler) handleStepAchievementProgress(w http.ResponseWriter, r *http.Request) {
+	if h.stepAchievementSvc == nil {
+		writeError(w, http.StatusNotImplemented, "step achievement service is disabled")
+		return
+	}
+	projectRef := strings.TrimSpace(queryString(r, "project_ref"))
+	if projectRef == "" {
+		writeError(w, http.StatusBadRequest, "project_ref is required")
+		return
+	}
+	out, err := h.stepAchievementSvc.GetProgress(r.Context(), projectRef)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) handleCredentialTraceGet(w http.ResponseWriter, r *http.Request) {
+	achievementID, err := pathInt64(r, "achievement_id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid achievement_id")
+		return
+	}
+
+	// 查询 credential_trace 视图
+	// 用户可以直接使用 SQL: SELECT * FROM credential_trace WHERE achievement_id = ?
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"hint": "Use credential_trace view for full trace",
+		"sql":  fmt.Sprintf("SELECT * FROM credential_trace WHERE achievement_id = %d", achievementID),
+	})
+}
+
+func (h *Handler) handleCredentialTraceCreate(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		AchievementID int64  `json:"achievement_id"`
+		CredentialID  int64  `json:"credential_id"`
+		ProjectRef    string `json:"project_ref"`
+		ExecutorRef   string `json:"executor_ref"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// 获取 achievement
+	ach, err := h.achievementSvc.Get(r.Context(), in.AchievementID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "achievement not found")
+		return
+	}
+
+	// 绑定资质到业绩
+	if err := h.achievementSvc.BindCredential(r.Context(), in.AchievementID, in.CredentialID,
+		in.ProjectRef, in.ExecutorRef); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":          "bound",
+		"achievement_id":  in.AchievementID,
+		"credential_id":   in.CredentialID,
+		"achievement_ref": ach.UTXORef,
+	})
+}
+
+// ══════════════════════════════════════════════════════════════
+// Review & Publish Center (审图与出版中心)
+// ══════════════════════════════════════════════════════════════
+
+func (h *Handler) handleReviewVerify(w http.ResponseWriter, r *http.Request) {
+	if h.reviewPublishSvc == nil {
+		writeError(w, http.StatusNotImplemented, "review_publish service is disabled")
+		return
+	}
+	var in review_publish.VerifyReviewInput
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, err := h.reviewPublishSvc.VerifyReview(r.Context(), in)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if result.CanSeal {
+		writeJSON(w, http.StatusOK, result)
+	} else {
+		writeJSON(w, http.StatusForbidden, result)
+	}
+}
+
+func (h *Handler) handleReviewSeal(w http.ResponseWriter, r *http.Request) {
+	if h.reviewPublishSvc == nil {
+		writeError(w, http.StatusNotImplemented, "review_publish service is disabled")
+		return
+	}
+	var body struct {
+		BatchRef string `json:"batch_ref"`
+		review_publish.VerifyReviewInput
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if body.BatchRef == "" {
+		writeError(w, http.StatusBadRequest, "batch_ref is required")
+		return
+	}
+	consumption, err := h.reviewPublishSvc.SealReview(r.Context(), body.BatchRef, body.VerifyReviewInput)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"status":      "sealed",
+		"consumption": consumption,
+	})
+}
+
+func (h *Handler) handlePublishVerify(w http.ResponseWriter, r *http.Request) {
+	if h.reviewPublishSvc == nil {
+		writeError(w, http.StatusNotImplemented, "review_publish service is disabled")
+		return
+	}
+	var in review_publish.VerifyPublishInput
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, err := h.reviewPublishSvc.VerifyPublish(r.Context(), in)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if result.CanPublish {
+		writeJSON(w, http.StatusOK, result)
+	} else {
+		writeJSON(w, http.StatusForbidden, result)
+	}
+}
+
+func (h *Handler) handlePublishDrawing(w http.ResponseWriter, r *http.Request) {
+	if h.reviewPublishSvc == nil {
+		writeError(w, http.StatusNotImplemented, "review_publish service is disabled")
+		return
+	}
+	var body struct {
+		DrawingID    int64  `json:"drawing_id"`
+		PublisherRef string `json:"publisher_ref"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if body.DrawingID == 0 {
+		writeError(w, http.StatusBadRequest, "drawing_id is required")
+		return
+	}
+	if err := h.reviewPublishSvc.PublishDrawing(r.Context(), body.DrawingID, body.PublisherRef); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":     "published",
+		"drawing_id": body.DrawingID,
+	})
 }

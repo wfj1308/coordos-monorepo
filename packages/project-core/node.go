@@ -1,7 +1,7 @@
 // ============================================================
 //  CoordOS — ProjectTree 核心协议定义
 //  以项目为核心的资源与执行体配置平台
-//  
+//
 //  两个核心操作：
 //    CONFIGURE  配置资源与执行体的绑定关系
 //    TRANSFORM  执行体在约束内消耗资源产出UTXO
@@ -10,6 +10,8 @@
 package projectcore
 
 import (
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -63,7 +65,7 @@ type ProjectNode struct {
 	ProcurementRef VRef `json:"procurement_ref"` // 招采平台单号（必填）
 
 	// ── 资源约束（Genesis UTXO，定标后锁定） ─────────────────
-	GenesisUTXORef VRef              `json:"genesis_utxo_ref"`
+	GenesisUTXORef VRef               `json:"genesis_utxo_ref"`
 	Constraint     ExecutorConstraint `json:"constraint"` // 执行体输入资源约束
 
 	// ── 项目树结构 ────────────────────────────────────────────
@@ -76,10 +78,10 @@ type ProjectNode struct {
 	Status     LifecycleStatus  `json:"status"`
 
 	// ── 存证 ─────────────────────────────────────────────────
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
-	ProofHash  string    `json:"proof_hash"`  // 状态哈希，防篡改
-	PrevHash   string    `json:"prev_hash"`   // 链式存证
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	ProofHash string    `json:"proof_hash"` // 状态哈希，防篡改
+	PrevHash  string    `json:"prev_hash"`  // 链式存证
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -113,11 +115,11 @@ type Energy struct {
 }
 
 type Skill struct {
-	Name       string `json:"name"`        // "桥梁施工图设计"
-	Unit       string `json:"unit"`        // 计量单位："延米/㎡/项"
-	UnitPrice  int64  `json:"unit_price"`  // 单价（分）
-	Tolerance  float64 `json:"tolerance"` // 单价容差 0.05=5%
-	OutputKind string `json:"output_kind"` // 产出UTXO类型
+	Name       string  `json:"name"`        // "桥梁施工图设计"
+	Unit       string  `json:"unit"`        // 计量单位："延米/㎡/项"
+	UnitPrice  int64   `json:"unit_price"`  // 单价（分）
+	Tolerance  float64 `json:"tolerance"`   // 单价容差 0.05=5%
+	OutputKind string  `json:"output_kind"` // 产出UTXO类型
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -143,9 +145,9 @@ type GenesisUTXO struct {
 	// 里程碑付款节点
 	PaymentNodes []PaymentNode `json:"payment_nodes"`
 
-	Status    string `json:"status"` // ACTIVE/EXHAUSTED/REVOKED
+	Status    string    `json:"status"` // ACTIVE/EXHAUSTED/REVOKED
 	CreatedAt time.Time `json:"created_at"`
-	ProofHash string `json:"proof_hash"`
+	ProofHash string    `json:"proof_hash"`
 }
 
 type PaymentNode struct {
@@ -162,14 +164,14 @@ type PaymentNode struct {
 // ══════════════════════════════════════════════════════════════
 
 type MilestoneEvent struct {
-	ID          string          `json:"id"`
-	ProjectRef  VRef            `json:"project_ref"`
-	Name        string          `json:"name"`        // "施工图设计完成"
-	Status      string          `json:"status"`      // PENDING/REACHED/SKIPPED
-	ReachedAt   *time.Time      `json:"reached_at"`
-	UTXORef     VRef            `json:"utxo_ref"`    // 触发的产出UTXO
-	SignedBy    VRef            `json:"signed_by"`   // 必须是总院执行体（RULE-002）
-	ProofHash   string          `json:"proof_hash"`
+	ID         string     `json:"id"`
+	ProjectRef VRef       `json:"project_ref"`
+	Name       string     `json:"name"`   // "施工图设计完成"
+	Status     string     `json:"status"` // PENDING/REACHED/SKIPPED
+	ReachedAt  *time.Time `json:"reached_at"`
+	UTXORef    VRef       `json:"utxo_ref"`  // 触发的产出UTXO
+	SignedBy   VRef       `json:"signed_by"` // 必须是总院执行体（RULE-002）
+	ProofHash  string     `json:"proof_hash"`
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -183,12 +185,12 @@ type Contract struct {
 	TenantID   string `json:"tenant_id"`
 
 	// 必填最小字段集
-	ContractNo      string `json:"contract_no"`       // 合同编号
-	ContractName    string `json:"contract_name"`     // 合同名称
-	PartyA          VRef   `json:"party_a"`           // 甲方主体
-	PartyB          VRef   `json:"party_b"`           // 乙方主体
-	BranchRef       VRef   `json:"branch_ref"`        // 分院归属
-	ManagerRef      VRef   `json:"manager_ref"`       // 项目负责人
+	ContractNo   string `json:"contract_no"`   // 合同编号
+	ContractName string `json:"contract_name"` // 合同名称
+	PartyA       VRef   `json:"party_a"`       // 甲方主体
+	PartyB       VRef   `json:"party_b"`       // 乙方主体
+	BranchRef    VRef   `json:"branch_ref"`    // 分院归属
+	ManagerRef   VRef   `json:"manager_ref"`   // 项目负责人
 
 	AmountWithTax    int64   `json:"amount_with_tax"`    // 含税金额（分）
 	AmountWithoutTax int64   `json:"amount_without_tax"` // 不含税金额（分）
@@ -249,25 +251,27 @@ type ProjectRules interface {
 
 // ProjectEvent：项目操作事件（进入规则校验的统一入口）
 type ProjectEvent struct {
-	EventID    string      `json:"event_id"`
-	ProjectRef VRef        `json:"project_ref"`
-	TenantID   string      `json:"tenant_id"`
-	Verb       ProjectVerb `json:"verb"`
-	ActorRef   VRef        `json:"actor_ref"`
-	ContractRef VRef       `json:"contract_ref,omitempty"` // PAY时必填
-	PlanRef    VRef        `json:"plan_ref,omitempty"`     // TRANSFORM时必填
-	Timestamp  time.Time   `json:"timestamp"`
-	Signature  string      `json:"signature"`
-	Payload    map[string]interface{} `json:"payload"`
+	EventID     string                 `json:"event_id"`
+	ProjectRef  VRef                   `json:"project_ref"`
+	TenantID    string                 `json:"tenant_id"`
+	Verb        ProjectVerb            `json:"verb"`
+	ActorRef    VRef                   `json:"actor_ref"`
+	ContractRef VRef                   `json:"contract_ref,omitempty"` // PAY时必填
+	PlanRef     VRef                   `json:"plan_ref,omitempty"`     // TRANSFORM时必填
+	Timestamp   time.Time              `json:"timestamp"`
+	Signature   string                 `json:"signature"`
+	Payload     map[string]interface{} `json:"payload"`
 }
 
 // ProjectContext：租户隔离的项目上下文
 type ProjectContext struct {
-	TenantID    string
-	ProjectTree ProjectTreeStore
-	GenesisStore GenesisUTXOStore
+	TenantID      string
+	ProjectTree   ProjectTreeStore
+	GenesisStore  GenesisUTXOStore
 	ContractStore ContractStore
-	AuditStore  AuditStore
+	UTXOStore     UTXOStore
+	UTXORelations UTXORelationStore
+	AuditStore    AuditStore
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -297,6 +301,97 @@ type ContractStore interface {
 	GetRemainingAmount(ref VRef) (int64, error)
 	// RULE-003 校验：合同是否有效且余额充足
 	ValidatePayment(contractRef VRef, amount int64) error
+}
+
+// UTXORecord is the minimal UTXO shape required by project-core rules.
+type UTXORecord struct {
+	Ref        VRef
+	ProjectRef VRef
+	GenesisRef VRef
+	InputRefs  []VRef
+	Kind       string
+	PrevHash   string
+	ProofHash  string
+	Status     string
+}
+
+type UTXOKind string
+
+const (
+	UTXOKindChangeOrder  UTXOKind = "CHANGE_ORDER"
+	UTXOKindScopeChange  UTXOKind = "SCOPE_CHANGE"
+	UTXOKindResourceCall UTXOKind = "RESOURCE_CALL"
+	UTXOKindReassignCall UTXOKind = "REASSIGN_CALL"
+	UTXOKindSpecUpgrade  UTXOKind = "SPEC_UPGRADE"
+	UTXOKindDesignChange UTXOKind = "DESIGN_CHANGE"
+	UTXOKindReviewCert   UTXOKind = "REVIEW_CERTIFICATE"
+	UTXOKindSettleCert   UTXOKind = "SETTLEMENT_CERTIFICATE"
+)
+
+type UTXOStore interface {
+	Get(ref VRef) (*UTXORecord, error)
+	ListByProject(projectRef VRef) ([]*UTXORecord, error)
+}
+
+type UTXORelationType string
+
+const (
+	UTXORelationSupersedes   UTXORelationType = "SUPERSEDES"
+	UTXORelationReassigns    UTXORelationType = "REASSIGNS"
+	UTXORelationSpecUpgrades UTXORelationType = "SPEC_UPGRADES"
+)
+
+func IsAllowedChangeUTXOKindForRelation(relationType UTXORelationType, kind string) bool {
+	k := UTXOKind(strings.ToUpper(strings.TrimSpace(kind)))
+	switch relationType {
+	case UTXORelationSupersedes:
+		return k == UTXOKindChangeOrder || k == UTXOKindScopeChange
+	case UTXORelationReassigns:
+		return k == UTXOKindResourceCall || k == UTXOKindReassignCall
+	case UTXORelationSpecUpgrades:
+		return k == UTXOKindSpecUpgrade || k == UTXOKindDesignChange
+	default:
+		return false
+	}
+}
+
+// NormalizeUTXOKind canonicalizes known kinds and allows v:// kind refs.
+func NormalizeUTXOKind(raw string) (string, error) {
+	kind := strings.TrimSpace(raw)
+	if kind == "" {
+		return "", fmt.Errorf("utxo kind is required")
+	}
+	upper := strings.ToUpper(kind)
+	switch UTXOKind(upper) {
+	case UTXOKindChangeOrder,
+		UTXOKindScopeChange,
+		UTXOKindResourceCall,
+		UTXOKindReassignCall,
+		UTXOKindSpecUpgrade,
+		UTXOKindDesignChange,
+		UTXOKindReviewCert,
+		UTXOKindSettleCert:
+		return upper, nil
+	}
+	if strings.HasPrefix(strings.ToLower(kind), "v://") {
+		return kind, nil
+	}
+	return "", fmt.Errorf("invalid utxo kind: %s", raw)
+}
+
+type UTXORelationRecord struct {
+	Ref           VRef
+	FromRef       VRef
+	ToRef         VRef
+	ChangeUTXORef VRef
+	Type          UTXORelationType
+	Reason        string
+	Metadata      map[string]interface{}
+}
+
+type UTXORelationStore interface {
+	ListByFrom(ref VRef) ([]*UTXORelationRecord, error)
+	ListByTo(ref VRef) ([]*UTXORelationRecord, error)
 }
 
 type AuditStore interface {

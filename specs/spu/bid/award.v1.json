@@ -1,0 +1,72 @@
+{
+  "$schema": "https://coordos.io/schemas/spu/v1",
+  "spu_ref": "v://cn.zhongbei/spu/bid/award@v1",
+  "name": "中标确认",
+  "version": "v1",
+  "domain": "bid",
+  "stage": "BIDDING",
+  "kind": "CERT",
+  "status": "ACTIVE",
+  "description": "投标链的终点。确认中标后，将标书UTXO状态更新为AWARDED。此动作将触发数据库函数fn_bid_awarded，自动创建项目树、合同Genesis UTXO，并正式占用工程师资源，完成从投标到项目的闭环转换。",
+  "product_unit": {
+    "deliverables": [
+      {
+        "name": "中标确认UTXO",
+        "format": ["JSON"],
+        "required": true,
+        "completeness_check": ["bid_doc_ref", "award_date", "contract_amount"]
+      }
+    ]
+  },
+  "parameter_unit": {
+    "input_parameters": {
+      "award_notice_ref": { "label": "中标通知书引用", "type": "string", "required": true },
+      "contract_amount": { "label": "中标金额", "type": "integer", "unit": "分", "required": true }
+    },
+    "input_resource_refs": {
+      "bid_document_utxo": {
+        "label": "已提交的标书UTXO",
+        "kind": "BID_DOCUMENT_UTXO",
+        "required": true,
+        "status_must_be": "SUBMITTED"
+      }
+    }
+  },
+  "process_unit": {
+    "total_steps": 1,
+    "steps": [
+      {
+        "seq": 1,
+        "name": "确认中标 (AwardBid)",
+        "skill": "bid_award_confirm",
+        "inputs": ["bid_document_utxo", "award_notice_ref"],
+        "output_kind": "BID_DOCUMENT_UTXO",
+        "auto_executable": false,
+        "note": "调用/api/v1/bid/{id}/award，将状态更新为AWARDED。所有后续动作由数据库触发器自动完成。"
+      }
+    ]
+  },
+  "executor_requirement": {
+    "capability_level": "市场经理",
+    "required_skills": ["bid_award_confirm"],
+    "qualification": "ROLE_MARKET_MANAGER"
+  },
+  "acceptance_spec": {
+    "evidence_required": [
+      { "kind": "BID_DOCUMENT_UTXO", "description": "标书主体，状态为AWARDED", "blocking": true }
+    ]
+  },
+  "utxo_state_machine": {
+    "states": ["SUBMITTED", "AWARDED", "FAILED"],
+    "transitions": [
+      { "from": "SUBMITTED", "to": "AWARDED", "condition": "AwardBid API call" },
+      { "from": "SUBMITTED", "to": "FAILED", "condition": "FailBid API call" }
+    ]
+  },
+  "downstream_trigger": {
+    "on_status_change": "AWARDED",
+    "action": "EXECUTE_DB_TRIGGER:fn_bid_awarded",
+    "description": "自动创建项目树(ProjectNode)，创建合同资金锚(Contract Genesis UTXO)，并将投标时引用的工程师资源从REFERENCED更新为OCCUPIED。"
+  },
+  "upstream_spu_refs": ["v://cn.zhongbei/spu/bid/preparation@v1"]
+}

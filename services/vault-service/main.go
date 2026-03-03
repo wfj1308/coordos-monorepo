@@ -19,6 +19,7 @@ type backend interface {
 	Contracts() store.ContractStore
 	Parcels() store.ParcelStore
 	UTXOs() store.UTXOStore
+	UTXORelations() store.UTXORelationStore
 	Settlements() store.SettlementStore
 	Wallets() store.WalletStore
 	Audit() store.AuditStore
@@ -40,15 +41,24 @@ func main() {
 		}
 	}()
 
+	backfilled, err := db.UTXORelations().BackfillAuthorizationChain(cfg.Tenant.ID, "")
+	if err != nil {
+		log.Fatalf("backfill utxo relation evidence failed: %v", err)
+	}
+	if backfilled > 0 {
+		log.Printf("utxo relation evidence backfilled tenant=%s count=%d", cfg.Tenant.ID, backfilled)
+	}
+
 	deps := app.BuildDeps(cfg.Tenant.ID, app.StoreSet{
-		Projects:    db.ProjectTree(),
-		Genesis:     db.Genesis(),
-		Contracts:   db.Contracts(),
-		Parcels:     db.Parcels(),
-		UTXOs:       db.UTXOs(),
-		Settlements: db.Settlements(),
-		Wallets:     db.Wallets(),
-		Audit:       db.Audit(),
+		Projects:      db.ProjectTree(),
+		Genesis:       db.Genesis(),
+		Contracts:     db.Contracts(),
+		Parcels:       db.Parcels(),
+		UTXOs:         db.UTXOs(),
+		UTXORelations: db.UTXORelations(),
+		Settlements:   db.Settlements(),
+		Wallets:       db.Wallets(),
+		Audit:         db.Audit(),
 	})
 
 	log.Printf(
@@ -69,4 +79,3 @@ func openBackend(cfg svcconfig.Config) (backend, error) {
 	}
 	return rocksdb.Open(cfg.Storage.RocksPath)
 }
-

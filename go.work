@@ -4,6 +4,7 @@ use (
     ./packages/resolver
     ./packages/vuri
     ./packages/project-core
+    ./packages/vml-core
     ./services/vault-service
     ./services/design-institute
 )

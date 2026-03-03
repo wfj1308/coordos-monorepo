@@ -1,0 +1,101 @@
+{
+  "$schema": "https://coordos.io/schemas/spu/v1",
+  "spu_ref": "v://zhongbei/spu/contract/review@v1",
+  "name": "Contract Review",
+  "version": "v1",
+  "domain": "contract",
+  "stage": "CONTRACT",
+  "kind": "RECORD",
+  "status": "ACTIVE",
+  "spec_basis": ["Contract Law", "Company Contract SOP v1"],
+  "product_unit": {
+    "deliverables": [
+      {
+        "name": "Reviewed contract draft",
+        "format": ["PDF", "DOCX"],
+        "required": true,
+        "completeness_check": ["payment_terms", "scope_clause", "risk_clause", "liability_clause"]
+      }
+    ]
+  },
+  "parameter_unit": {
+    "input_parameters": {
+      "contract_amount": { "label": "Contract amount", "type": "float", "unit": "CNY", "range": [0, 10000000000] }
+    },
+    "derived_parameters": {},
+    "input_resource_refs": {
+      "bid_award_utxo": {
+        "label": "Bid award record",
+        "kind": "BID_AWARD_UTXO",
+        "required": true,
+        "fields_needed": ["project_ref", "award_amount", "counterparty"]
+      },
+      "contract_draft_utxo": {
+        "label": "Contract draft",
+        "kind": "CONTRACT_DRAFT",
+        "required": true,
+        "fields_needed": ["contract_no", "main_clauses", "payment_terms"]
+      }
+    }
+  },
+  "process_unit": {
+    "total_steps": 3,
+    "steps": [
+      {
+        "seq": 1,
+        "name": "Clause risk scan",
+        "skill": "risk_control",
+        "inputs": ["contract_draft_utxo"],
+        "output_kind": "CONTRACT_RISK_SCAN_UTXO",
+        "auto_executable": true,
+        "confidence_threshold": 0.9
+      },
+      {
+        "seq": 2,
+        "name": "Business review",
+        "skill": "contract_review",
+        "inputs": ["bid_award_utxo", "contract_risk_scan_utxo"],
+        "output_kind": "CONTRACT_REVIEWED_UTXO",
+        "auto_executable": false
+      },
+      {
+        "seq": 3,
+        "name": "Collection checkpoint setup",
+        "skill": "collection_tracking",
+        "inputs": ["contract_reviewed_utxo"],
+        "output_kind": "CONTRACT_REVIEW_READY_UTXO",
+        "auto_executable": true,
+        "confidence_threshold": 1.0
+      }
+    ]
+  },
+  "executor_requirement": {
+    "capability_level": "ASSISTANT_ENGINEER",
+    "required_skills": ["contract_review", "risk_control", "collection_tracking"],
+    "qualification": "ROLE_CONTRACT_ADMIN",
+    "energy": {
+      "kind": "LABOR",
+      "base_days": 2,
+      "range_days": [1, 4]
+    }
+  },
+  "acceptance_spec": {
+    "parameter_checks": [
+      { "check": "contract_amount >= 0", "spec_ref": "SOP:ContractReview", "blocking": true }
+    ],
+    "completeness_checks": ["product_unit.deliverables ALL present"],
+    "evidence_required": [
+      { "kind": "CONTRACT_REVIEW_READY_UTXO", "description": "Contract review record", "blocking": true }
+    ]
+  },
+  "utxo_state_machine": {
+    "states": ["DRAFT", "REVIEWED", "APPROVED", "DELIVERABLE"],
+    "transitions": [
+      { "from": "DRAFT", "to": "REVIEWED", "condition": "evidence_required ALL present", "auto": true },
+      { "from": "REVIEWED", "to": "APPROVED", "condition": "risk_scan_passed=true", "auto": true },
+      { "from": "APPROVED", "to": "DELIVERABLE", "condition": "contract_review_signed=true", "auto": true }
+    ]
+  },
+  "upstream_spu_refs": ["v://zhongbei/spu/bid/award@v1"],
+  "downstream_spu_refs": ["v://zhongbei/spu/contract/sign@v1"]
+}

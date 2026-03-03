@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: CoordOS Vault Service API
-  version: 0.2.0
+  version: 0.3.0
   description: |
     OpenAPI baseline for `services/vault-service`.
     Notes:
@@ -236,8 +236,12 @@ paths:
                 project_ref: {type: string}
                 parcel_ref: {type: string}
                 genesis_ref: {type: string}
+                input_refs:
+                  type: array
+                  items: {type: string}
                 executor_ref: {type: string}
-                kind: {type: string}
+                kind:
+                  $ref: "#/components/schemas/UTXOKind"
                 status: {type: string}
                 prev_hash: {type: string}
                 proof_hash: {type: string}
@@ -302,6 +306,119 @@ paths:
         "200": {$ref: "#/components/responses/GenericSuccess"}
         default: {$ref: "#/components/responses/ErrorResponse"}
 
+  /api/v1/utxos/{ref}/supersede:
+    post:
+      tags: [UTXO]
+      summary: Create SUPERSEDES relation (from supersedes to)
+      operationId: createUTXOSupersede
+      security: [{BearerAuth: []}]
+      parameters:
+        - $ref: "#/components/parameters/Ref"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UTXORelationCreateRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UTXORelation"
+        "409": {$ref: "#/components/responses/ConflictResponse"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/utxos/{ref}/reassign:
+    post:
+      tags: [UTXO]
+      summary: Create REASSIGNS relation on same lineage
+      operationId: createUTXOReassign
+      security: [{BearerAuth: []}]
+      parameters:
+        - $ref: "#/components/parameters/Ref"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UTXORelationCreateRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UTXORelation"
+        "409": {$ref: "#/components/responses/ConflictResponse"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/utxos/{ref}/spec-upgrade:
+    post:
+      tags: [UTXO]
+      summary: Create SPEC_UPGRADES relation on same lineage
+      operationId: createUTXOSpecUpgrade
+      security: [{BearerAuth: []}]
+      parameters:
+        - $ref: "#/components/parameters/Ref"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UTXORelationCreateRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UTXORelation"
+        "409": {$ref: "#/components/responses/ConflictResponse"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/utxos/{ref}/relations:
+    get:
+      tags: [UTXO]
+      summary: Query incoming and outgoing UTXO relations
+      operationId: queryUTXORelations
+      security: [{BearerAuth: []}]
+      parameters:
+        - $ref: "#/components/parameters/Ref"
+      responses:
+        "200":
+          description: Relation list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UTXORelationQueryResponse"
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /api/v1/utxo-relations/backfill-evidence:
+    post:
+      tags: [UTXO]
+      summary: Backfill missing legacy relation evidence (reason/authorization_chain)
+      operationId: backfillUTXORelationEvidence
+      description: |
+        PLATFORM role only.
+        Backfills missing relation reason and authorization_chain for current tenant.
+      security: [{BearerAuth: []}]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UTXORelationBackfillRequest"
+      responses:
+        "200":
+          description: Backfill execution result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UTXORelationBackfillResponse"
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
   /api/v1/projects/{ref}/settle:
     post:
       tags: [Settlement]
@@ -343,6 +460,113 @@ components:
       required: [error]
       properties:
         error: {type: string}
+    KnownUTXOKind:
+      type: string
+      enum:
+        - CHANGE_ORDER
+        - SCOPE_CHANGE
+        - RESOURCE_CALL
+        - REASSIGN_CALL
+        - SPEC_UPGRADE
+        - DESIGN_CHANGE
+        - REVIEW_CERTIFICATE
+        - SETTLEMENT_CERTIFICATE
+    VRefKind:
+      type: string
+      pattern: "^v://.+"
+      description: v://... kind ref accepted for backward compatibility.
+    UTXOKind:
+      oneOf:
+        - $ref: "#/components/schemas/KnownUTXOKind"
+        - $ref: "#/components/schemas/VRefKind"
+      description: |
+        UTXO kind accepted by ingest.
+        Prefer KnownUTXOKind; v://... refs are still allowed for compatibility.
+    UTXORelationType:
+      type: string
+      enum: [SUPERSEDES, REASSIGNS, SPEC_UPGRADES]
+    UTXORelationCreateRequest:
+      type: object
+      required: [to_ref, change_utxo_ref, reason]
+      properties:
+        to_ref: {type: string}
+        change_utxo_ref:
+          type: string
+          description: |
+            Required change-order UTXO reference.
+            Must exist, be SEALED, and be in same project as from/to.
+            Its UTXO kind must match relation type:
+            - SUPERSEDES: CHANGE_ORDER or SCOPE_CHANGE
+            - REASSIGNS: RESOURCE_CALL or REASSIGN_CALL
+            - SPEC_UPGRADES: SPEC_UPGRADE or DESIGN_CHANGE
+        reason:
+          type: string
+          description: Human-readable reason for this change relation.
+        payload:
+          type: object
+          description: |
+            Extra evidence for this change relation.
+            authorization_chain should be a non-empty array of approver refs.
+            If omitted, server auto-fills with current actor ref.
+          properties:
+            authorization_chain:
+              type: array
+              minItems: 1
+              items: {type: string}
+          additionalProperties: true
+    UTXORelation:
+      type: object
+      required: [ref, from_ref, to_ref, change_utxo_ref, type, project_ref, tenant_id, created_at]
+      properties:
+        ref: {type: string}
+        from_ref: {type: string}
+        to_ref: {type: string}
+        change_utxo_ref: {type: string}
+        type:
+          $ref: "#/components/schemas/UTXORelationType"
+        project_ref: {type: string}
+        reason: {type: string}
+        payload:
+          type: object
+          additionalProperties: true
+        tenant_id: {type: string}
+        created_at: {type: string, format: date-time}
+    UTXORelationQueryResponse:
+      type: object
+      required: [utxo_ref, outgoing, incoming, as_change, count_outgoing, count_incoming, count_as_change, count_relations]
+      properties:
+        utxo_ref: {type: string}
+        outgoing:
+          type: array
+          items:
+            $ref: "#/components/schemas/UTXORelation"
+        incoming:
+          type: array
+          items:
+            $ref: "#/components/schemas/UTXORelation"
+        as_change:
+          type: array
+          description: Relations where this utxo_ref is used as change_utxo_ref.
+          items:
+            $ref: "#/components/schemas/UTXORelation"
+        count_outgoing: {type: integer}
+        count_incoming: {type: integer}
+        count_as_change: {type: integer}
+        count_relations: {type: integer}
+    UTXORelationBackfillRequest:
+      type: object
+      properties:
+        fallback_actor_ref:
+          type: string
+          description: |
+            Optional fallback actor ref used when backfilling missing authorization_chain.
+            If omitted, server uses v://{tenant}/actor/system-backfill.
+    UTXORelationBackfillResponse:
+      type: object
+      required: [tenant_id, updated_relations]
+      properties:
+        tenant_id: {type: string}
+        updated_relations: {type: integer}
   responses:
     GenericSuccess:
       description: Success response
@@ -350,6 +574,12 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/GenericObject"
+    ConflictResponse:
+      description: Conflict response
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
     ErrorResponse:
       description: Error response
       content:

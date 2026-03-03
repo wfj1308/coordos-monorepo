@@ -6,23 +6,25 @@
 package api
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
+
+	vmlcore "coordos/vml-core"
 )
 
 // ── 请求结构 ──────────────────────────────────────────────────
 
 type UTXOIngestRequest struct {
-	SPURef      string          `json:"spu_ref"`       // v://zhongbei/spu/bridge/pile_foundation_drawing@v1
-	ProjectRef  string          `json:"project_ref"`   // v://zhongbei/project/highway-001/design/structure
-	ExecutorRef string          `json:"executor_ref"`  // v://zhongbei/executor/branch/fgs-001
-	Payload     json.RawMessage `json:"payload"`       // 产出内容（图纸引用/文件hash等）
-	ProofHash   string          `json:"proof_hash"`    // SHA256(spu_ref+project_ref+executor_ref+payload)
-	StepUTXOs   map[string]string `json:"step_utxos"` // 各步骤产出的UTXO引用
-	IngestedAt  string          `json:"ingested_at"`   // ISO8601
+	SPURef       string            `json:"spu_ref"`       // v://zhongbei/spu/bridge/pile_foundation_drawing@v1
+	ProjectRef   string            `json:"project_ref"`   // v://zhongbei/project/highway-001/design/structure
+	ContainerRef string            `json:"container_ref"` // 执行体能力容器引用
+	Steps        []json.RawMessage `json:"steps"`         // Trip 步骤列表，用于计算 rolling-hash
+	Payload      json.RawMessage   `json:"payload"`       // 产出内容（图纸引用/文件hash等）
+	ProofHash    string            `json:"proof_hash"`    // rolling-hash-v1 证明
+	StepUTXOs    map[string]string `json:"step_utxos"`    // 各步骤产出的UTXO引用
+	IngestedAt   string            `json:"ingested_at"`   // ISO8601
 }
 
 type UTXOIngestResponse struct {
@@ -55,13 +57,29 @@ func (h *UTXOIngestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. 校验必要字段
-	if req.SPURef == "" || req.ProjectRef == "" || req.ExecutorRef == "" {
-		http.Error(w, "spu_ref, project_ref, executor_ref are required", http.StatusBadRequest)
+	if req.SPURef == "" || req.ProjectRef == "" || req.ContainerRef == "" || len(req.Steps) == 0 {
+		http.Error(w, "spu_ref, project_ref, container_ref, and non-empty steps are required", http.StatusBadRequest)
 		return
 	}
 
-	// 3. 验证 proof_hash
-	expected := computeProofHash(req.SPURef, req.ProjectRef, req.ExecutorRef, req.Payload)
+	// 3. 验证 proof_hash (使用 rolling-hash-v1)
+	steps := make([]any, len(req.Steps))
+	for i, s := range req.Steps {
+		var stepData any
+		if err := json.Unmarshal(s, &stepData); err != nil {
+			http.Error(w, fmt.Sprintf("invalid json in steps[%d]: %v", i, err), http.StatusBadRequest)
+			return
+		}
+		steps[i] = stepData
+	}
+
+	result, err := vmlcore.ComputeRollingHash(steps, req.ContainerRef, req.SPURef)
+	if err != nil {
+		http.Error(w, "failed to compute proof_hash: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	expected := result.ProofHash
+
 	if req.ProofHash != expected {
 		http.Error(w, "proof_hash mismatch", http.StatusBadRequest)
 		return
@@ -76,7 +94,8 @@ func (h *UTXOIngestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		UTXORef:     utxoRef,
 		SPURef:      req.SPURef,
 		ProjectRef:  req.ProjectRef,
-		ExecutorRef: req.ExecutorRef,
+		ExecutorRef: req.ContainerRef, // 使用 ContainerRef 填充
+		Steps:       req.Steps,        // 存储完整步骤，用于第三方验证
 		Payload:     req.Payload,
 		ProofHash:   req.ProofHash,
 		StepUTXOs:   req.StepUTXOs,
@@ -92,7 +111,7 @@ func (h *UTXOIngestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 6. 自动匹配合同（根据 project_ref 找对应合同）
-	contractID, _ := h.contractMatcher.Match(r.Context(), req.ProjectRef, req.ExecutorRef)
+	contractID, _ := h.contractMatcher.Match(r.Context(), req.ProjectRef, req.ContainerRef)
 	if contractID != nil {
 		h.achievementStore.SetContract(r.Context(), id, *contractID)
 	}
@@ -158,6 +177,7 @@ type AchievementUTXO struct {
 	GenesisRef  string
 	ContractID  *int64
 	Payload     json.RawMessage
+	Steps       []json.RawMessage `json:"steps,omitempty"` // 增加了 steps 字段，用于验证
 	ProofHash   string
 	StepUTXOs   map[string]string
 	Status      string // PENDING/SETTLED/DISPUTED/LEGACY
@@ -167,15 +187,6 @@ type AchievementUTXO struct {
 }
 
 // ── 工具函数 ──────────────────────────────────────────────────
-
-func computeProofHash(spuRef, projectRef, executorRef string, payload []byte) string {
-	h := sha256.New()
-	h.Write([]byte(spuRef))
-	h.Write([]byte(projectRef))
-	h.Write([]byte(executorRef))
-	h.Write(payload)
-	return fmt.Sprintf("%x", h.Sum(nil))
-}
 
 func sanitizeRef(ref string) string {
 	// v://zhongbei/project/highway-001/design/structure

@@ -1,6 +1,6 @@
 {
   "$schema": "https://coordos.io/schemas/spu/v1",
-  "spu_ref": "v://zhongbei/spu/bridge/settlement_cert@v1",
+  "spu_ref": "v://cn.zhongbei/spu/bridge/settlement_cert@v1",
   "name": "结算凭证",
   "version": "v1",
   "domain": "bridge",
@@ -153,9 +153,9 @@
   "dispute_prc_value": "结算凭证UTXO封印后，整条证据链永久存档。任何争议查此UTXO即可得到完整的：合同→招采→Genesis→设计→施工→审图→坐标→强度→结算，全链不可篡改。",
 
   "upstream_spu_refs":[
-    "v://zhongbei/spu/bridge/review_certificate@v1",
-    "v://zhongbei/spu/bridge/coordinate_proof@v1",
-    "v://zhongbei/spu/bridge/concrete_strength_report@v1"
+    "v://cn.zhongbei/spu/bridge/review_certificate@v1",
+    "v://cn.zhongbei/spu/bridge/coordinate_proof@v1",
+    "v://cn.zhongbei/spu/bridge/concrete_strength_report@v1"
   ],
   "downstream_spu_refs":[]
 }

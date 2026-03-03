@@ -109,11 +109,41 @@ type UTXOStore interface {
 	ListByParcel(tenantID string, parcelRef pc.VRef) ([]*UTXO, error)
 }
 
+type UTXORelationStore interface {
+	Create(tenantID string, r *UTXORelation) error
+	ListByFrom(tenantID string, fromRef pc.VRef) ([]*UTXORelation, error)
+	ListByTo(tenantID string, toRef pc.VRef) ([]*UTXORelation, error)
+	ListByChangeUTXO(tenantID string, changeUTXORef pc.VRef) ([]*UTXORelation, error)
+	BackfillAuthorizationChain(tenantID string, fallbackActorRef pc.VRef) (int, error)
+}
+
+type UTXORelationType string
+
+const (
+	UTXORelationSupersedes   UTXORelationType = "SUPERSEDES"
+	UTXORelationReassigns    UTXORelationType = "REASSIGNS"
+	UTXORelationSpecUpgrades UTXORelationType = "SPEC_UPGRADES"
+)
+
+type UTXORelation struct {
+	Ref           pc.VRef                `json:"ref"`
+	FromRef       pc.VRef                `json:"from_ref"`
+	ToRef         pc.VRef                `json:"to_ref"`
+	ChangeUTXORef pc.VRef                `json:"change_utxo_ref"`
+	Type          UTXORelationType       `json:"type"`
+	ProjectRef    pc.VRef                `json:"project_ref"`
+	Reason        string                 `json:"reason"`
+	Payload       map[string]interface{} `json:"payload"`
+	TenantID      string                 `json:"tenant_id"`
+	CreatedAt     time.Time              `json:"created_at"`
+}
+
 type UTXO struct {
 	Ref        pc.VRef                `json:"ref"`
 	ProjectRef pc.VRef                `json:"project_ref"`
 	ParcelRef  pc.VRef                `json:"parcel_ref"`
 	GenesisRef pc.VRef                `json:"genesis_ref"`
+	InputRefs  []pc.VRef              `json:"input_refs"`
 	Kind       string                 `json:"kind"`
 	Status     string                 `json:"status"`
 	TenantID   string                 `json:"tenant_id"`
