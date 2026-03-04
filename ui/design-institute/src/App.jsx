@@ -35,14 +35,26 @@ const quickTemplates = [
     body: "",
   },
   {
+    name: "Verify Achievement Ref",
+    method: "GET",
+    url: "{DI}/api/v1/achievement/verify?ref=v://cn.zhongbei/utxo/achievement/highway/2024/001",
+    body: "",
+  },
+  {
+    name: "Verify Proof Hash",
+    method: "GET",
+    url: "{DI}/public/v1/verify/achievement/sha256:replace_with_hash",
+    body: "",
+  },
+  {
     name: "Manual Achievement",
     method: "POST",
     url: "{DI}/api/v1/achievements/manual",
     body: JSON.stringify(
       {
-        spu_ref: "v://zhongbei/spu/bridge/pile_foundation_drawing@v1",
-        project_ref: "v://10000/project/demo",
-        executor_ref: "v://person/11010519900101123X/executor",
+        spu_ref: "v://cn.zhongbei/spu/bridge/pile_foundation_drawing@v1",
+        project_ref: "v://cn.zhongbei/project/replace-with-real-project",
+        executor_ref: "v://cn.zhongbei/executor/person/replace-with-real-executor@v1",
         payload: { amount: 500000, stage: "review-finish" },
       },
       null,
@@ -75,11 +87,30 @@ export default function App() {
     dashboard,
     dashboardLoading,
     dashboardError,
+    libraryDetail,
+    libraryDetailLoading,
+    libraryDetailError,
+    libraryRelations,
+    libraryRelationsLoading,
+    libraryRelationsError,
+    executorVault,
+    executorVaultLoading,
+    executorVaultError,
+    librarySearch,
+    librarySearchLoading,
+    librarySearchError,
     selectedProjectRef,
     projectDetailLoading,
+    tablePages,
+    tablePageSize,
     setSelectedProjectRef,
     loadProjectDetail,
     loadDashboardData,
+    changeTablePage,
+    loadLibraryDetail,
+    loadLibraryRelations,
+    loadExecutorVault,
+    searchLibraries,
   } = useDashboardData({ diBase, useAuth, token });
 
   const {
@@ -89,6 +120,13 @@ export default function App() {
     partnerProfileNamespace,
     loadPartnerProfile,
     handlePartnerProfileNamespaceChange,
+    verifyInput,
+    verifyLoading,
+    verifyError,
+    verifyResult,
+    handleVerifyInputChange,
+    verifyAchievement,
+    useFirstProofHash,
   } = usePartnerProfile({ diBase, useAuth, token });
 
   const finalUrl = useMemo(
@@ -214,6 +252,13 @@ export default function App() {
           loading={partnerProfileLoading}
           error={partnerProfileError}
           profile={partnerProfile}
+          verifyInput={verifyInput}
+          verifyLoading={verifyLoading}
+          verifyError={verifyError}
+          verifyResult={verifyResult}
+          onVerifyInputChange={handleVerifyInputChange}
+          onVerify={verifyAchievement}
+          onUseFirstProofHash={useFirstProofHash}
         />
 
         <MainFlowSection
@@ -228,11 +273,30 @@ export default function App() {
           dashboard={dashboard}
           dashboardLoading={dashboardLoading}
           dashboardError={dashboardError}
+          libraryDetail={libraryDetail}
+          libraryDetailLoading={libraryDetailLoading}
+          libraryDetailError={libraryDetailError}
+          libraryRelations={libraryRelations}
+          libraryRelationsLoading={libraryRelationsLoading}
+          libraryRelationsError={libraryRelationsError}
+          executorVault={executorVault}
+          executorVaultLoading={executorVaultLoading}
+          executorVaultError={executorVaultError}
+          librarySearch={librarySearch}
+          librarySearchLoading={librarySearchLoading}
+          librarySearchError={librarySearchError}
           loadDashboardData={loadDashboardData}
+          loadLibraryDetail={loadLibraryDetail}
+          loadLibraryRelations={loadLibraryRelations}
+          loadExecutorVault={loadExecutorVault}
+          searchLibraries={searchLibraries}
           selectedProjectRef={selectedProjectRef}
           setSelectedProjectRef={setSelectedProjectRef}
           loadProjectDetail={loadProjectDetail}
           projectDetailLoading={projectDetailLoading}
+          tablePages={tablePages}
+          tablePageSize={tablePageSize}
+          changeTablePage={changeTablePage}
         />
 
         <EnvironmentTemplatesSection

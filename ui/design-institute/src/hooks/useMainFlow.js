@@ -323,7 +323,7 @@ export default function useMainFlow({ diBase, useAuth, token, onResponse }) {
       });
 
       await runStep(4, async () => {
-        const containerRef = ctx.personQualRef || `${ctx.namespaceRef}/container/cert/reg-structure/demo`;
+        const containerRef = ctx.personQualRef || `${ctx.namespaceRef}/container/cert/reg-structure/default`;
         const step1 = await req({
           method: "POST",
           url: `${di}/api/v1/step-achievements`,

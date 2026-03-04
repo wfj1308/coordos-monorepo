@@ -45,7 +45,14 @@ export function mergeFinanceRows(gatherings, invoices, settlements) {
     contract_id: toInt(pickField(it, ["contract_id", "ContractID"], 0)),
     state: String(pickField(it, ["state", "State"], "")),
   }));
-  return [...gs, ...is, ...ss].slice(0, 30);
+  const out = [];
+  const max = Math.max(gs.length, is.length, ss.length);
+  for (let i = 0; i < max; i += 1) {
+    if (gs[i]) out.push(gs[i]);
+    if (is[i]) out.push(is[i]);
+    if (ss[i]) out.push(ss[i]);
+  }
+  return out;
 }
 
 export function renderValue(value) {

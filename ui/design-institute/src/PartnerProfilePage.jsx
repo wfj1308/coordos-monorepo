@@ -202,6 +202,10 @@ export default function PartnerProfilePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [profile, setProfile] = useState(null);
+  const [verifyInput, setVerifyInput] = useState("");
+  const [verifyLoading, setVerifyLoading] = useState(false);
+  const [verifyError, setVerifyError] = useState("");
+  const [verifyResult, setVerifyResult] = useState(null);
 
   const endpoint = useMemo(() => `${trimTrailingSlash(diBase.trim())}/public/v1/partner-profile/${namespaceParam}`, [diBase, namespaceParam]);
 
@@ -227,6 +231,50 @@ export default function PartnerProfilePage() {
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const useFirstProofHash = () => {
+    const items = asArray(getIn(profile, ["achievement_layer", "items"], []));
+    let first = "";
+    for (const item of items) {
+      const hashes = asArray(item?.proof_hashes);
+      first = String(hashes[0] || "").trim();
+      if (first) break;
+    }
+    if (!first) {
+      setVerifyError("当前没有可用的 proof_hash");
+      return;
+    }
+    setVerifyError("");
+    setVerifyInput(first);
+  };
+
+  const runVerify = async () => {
+    const di = trimTrailingSlash(diBase.trim());
+    const raw = String(verifyInput || "").trim();
+    if (!di) {
+      setVerifyError("请先填写 Design-Ins 服务地址");
+      return;
+    }
+    if (!raw) {
+      setVerifyError("请输入 ref 或 proof_hash");
+      return;
+    }
+    setVerifyLoading(true);
+    setVerifyError("");
+    setVerifyResult(null);
+    try {
+      const isHash = raw.startsWith("sha256:") || /^[a-fA-F0-9]{64}$/.test(raw);
+      const url = isHash
+        ? `${di}/public/v1/verify/achievement/${encodeURIComponent(raw)}`
+        : `${di}/api/v1/achievement/verify?ref=${encodeURIComponent(raw)}`;
+      const data = await apiRequest(url);
+      setVerifyResult(data);
+    } catch (err) {
+      setVerifyError(String(err));
+    } finally {
+      setVerifyLoading(false);
+    }
+  };
 
   return (
     <main className="min-h-full px-4 py-6 md:px-8">
@@ -276,6 +324,38 @@ export default function PartnerProfilePage() {
           {error ? (
             <pre className="mt-3 overflow-auto rounded-lg bg-amber-950 p-3 text-xs text-amber-100">{error}</pre>
           ) : null}
+          <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <div className="mb-2 text-sm font-medium">UTXO 独立核验</div>
+            <div className="grid gap-2 md:grid-cols-[1fr_auto_auto]">
+              <input
+                value={verifyInput}
+                onChange={(e) => setVerifyInput(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                placeholder="输入 ref / utxo_ref / proof_hash"
+              />
+              <button
+                onClick={useFirstProofHash}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm transition hover:border-sky-400 hover:bg-sky-50"
+              >
+                使用首个 proof_hash
+              </button>
+              <button
+                onClick={runVerify}
+                disabled={verifyLoading}
+                className="rounded-lg bg-skyline px-4 py-2 text-sm font-medium text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {verifyLoading ? "核验中..." : "执行核验"}
+              </button>
+            </div>
+            {verifyError ? (
+              <pre className="mt-3 overflow-auto rounded-lg bg-amber-950 p-3 text-xs text-amber-100">{verifyError}</pre>
+            ) : null}
+            {verifyResult ? (
+              <pre className="mt-3 overflow-auto rounded-lg bg-slate-900 p-3 text-xs text-slate-100">
+                {JSON.stringify(verifyResult, null, 2)}
+              </pre>
+            ) : null}
+          </div>
         </section>
 
         {profile ? (

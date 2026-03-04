@@ -9,11 +9,25 @@ export function MetricCard({ label, value }) {
   );
 }
 
-export function DataTable({ title, rows, columns, emptyHint = "暂无数据" }) {
+export function DataTable({
+  title,
+  rows,
+  columns,
+  emptyHint = "暂无数据",
+  totalCount,
+  page = 1,
+  pageSize = 20,
+  onPageChange,
+}) {
+  const safeTotal = Number.isFinite(Number(totalCount)) ? Number(totalCount) : rows.length;
+  const safePageSize = Math.max(1, Number(pageSize) || 20);
+  const totalPages = Math.max(1, Math.ceil(safeTotal / safePageSize) || 1);
+  const currentPage = Math.min(Math.max(1, Number(page) || 1), totalPages);
+
   return (
     <article className="rounded-xl border border-slate-200 bg-white p-3">
       <div className="mb-2 text-sm font-medium">
-        {title} <span className="text-xs text-slate">({rows.length})</span>
+        {title} <span className="text-xs text-slate">({safeTotal})</span>
       </div>
       <div className="max-h-64 overflow-auto rounded border border-slate-200">
         <table className="w-full min-w-[680px] border-collapse text-left text-xs">
@@ -52,6 +66,29 @@ export function DataTable({ title, rows, columns, emptyHint = "暂无数据" }) 
           </tbody>
         </table>
       </div>
+      {typeof onPageChange === "function" && (
+        <div className="mt-2 flex items-center justify-end gap-2 text-xs">
+          <button
+            type="button"
+            onClick={() => onPageChange(currentPage - 1)}
+            disabled={currentPage <= 1}
+            className="rounded border border-slate-300 px-2 py-1 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            上一页
+          </button>
+          <span className="text-slate-600">
+            第 {currentPage}/{totalPages} 页
+          </span>
+          <button
+            type="button"
+            onClick={() => onPageChange(currentPage + 1)}
+            disabled={currentPage >= totalPages}
+            className="rounded border border-slate-300 px-2 py-1 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            下一页
+          </button>
+        </div>
+      )}
     </article>
   );
 }
