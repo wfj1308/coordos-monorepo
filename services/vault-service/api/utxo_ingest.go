@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	vmlcore "coordos/vml-core"
@@ -28,11 +29,11 @@ type UTXOIngestRequest struct {
 }
 
 type UTXOIngestResponse struct {
-	UTXORef       string  `json:"utxo_ref"`
-	AchievementID int64   `json:"achievement_id"`
-	ContractID    *int64  `json:"contract_id,omitempty"`   // 自动匹配到的合同
-	SettleTrigger bool    `json:"settle_trigger"`          // 是否触发了结算检查
-	Status        string  `json:"status"`
+	UTXORef       string `json:"utxo_ref"`
+	AchievementID int64  `json:"achievement_id"`
+	ContractID    *int64 `json:"contract_id,omitempty"` // 自动匹配到的合同
+	SettleTrigger bool   `json:"settle_trigger"`        // 是否触发了结算检查
+	Status        string `json:"status"`
 }
 
 // ── Handler ───────────────────────────────────────────────────
@@ -86,8 +87,9 @@ func (h *UTXOIngestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 4. 生成 UTXO ref
-	utxoRef := fmt.Sprintf("v://zhongbei/utxo/%s/%d",
-		sanitizeRef(req.ProjectRef), time.Now().UnixNano())
+	ns := extractNamespace(req.ProjectRef)
+	utxoRef := fmt.Sprintf("v://%s/utxo/%s/%d",
+		ns, sanitizeRef(req.ProjectRef), time.Now().UnixNano())
 
 	// 5. 写入业绩库
 	achievement := &AchievementUTXO{
@@ -195,4 +197,20 @@ func sanitizeRef(ref string) string {
 		return ref[5:]
 	}
 	return ref
+}
+
+func extractNamespace(ref string) string {
+	normalized := sanitizeRef(ref)
+	if normalized == "" {
+		return "cn.zhongbei"
+	}
+	parts := strings.SplitN(normalized, "/", 2)
+	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
+		return "cn.zhongbei"
+	}
+	ns := strings.TrimSpace(strings.ToLower(parts[0]))
+	if ns == "zhongbei" || ns == "10000" {
+		return "cn.zhongbei"
+	}
+	return ns
 }

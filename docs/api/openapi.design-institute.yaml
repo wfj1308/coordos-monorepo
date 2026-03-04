@@ -685,13 +685,14 @@ paths:
   /api/v1/achievement/verify:
     get:
       tags: [Achievement]
-      summary: Verify achievement or engineer receipt by ref
+      summary: Verify achievement/UTXO or engineer receipt by ref
       operationId: verifyAchievementByRef
       parameters:
         - name: ref
           in: query
           required: true
           schema: {type: string}
+          description: Supports achievement `ref`, `utxo_ref`, or engineer receipt `ref`.
       responses:
         "200": {$ref: "#/components/responses/GenericSuccess"}
         "404": {$ref: "#/components/responses/ErrorResponse"}
@@ -1043,6 +1044,33 @@ paths:
       responses:
         "200": {$ref: "#/components/responses/GenericSuccess"}
         default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/reports/three-libraries:
+    get:
+      tags: [Report]
+      summary: Get three-libraries dashboard data
+      operationId: reportThreeLibraries
+      parameters:
+        - name: qualification_limit
+          in: query
+          schema: {type: integer, default: 20}
+        - name: qualification_offset
+          in: query
+          schema: {type: integer, default: 0}
+        - name: standard_limit
+          in: query
+          schema: {type: integer, default: 20}
+        - name: standard_offset
+          in: query
+          schema: {type: integer, default: 0}
+        - name: regulation_limit
+          in: query
+          schema: {type: integer, default: 20}
+        - name: regulation_offset
+          in: query
+          schema: {type: integer, default: 0}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
   /api/v1/reports/company:
     get:
       tags: [Report]
@@ -1109,6 +1137,100 @@ paths:
         - name: days
           in: query
           schema: {type: integer, default: 30}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/libraries/{type}/{id}:
+    get:
+      tags: [Report]
+      summary: Get one library item detail by type and ID
+      operationId: libraryDetail
+      parameters:
+        - name: type
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [qualification, standard, regulation]
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        "404": {$ref: "#/components/responses/ErrorResponse"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/libraries/{type}/{id}/relations:
+    get:
+      tags: [Report]
+      summary: Get relation graph for one library item
+      operationId: libraryRelations
+      parameters:
+        - name: type
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [qualification, standard, regulation]
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - name: limit
+          in: query
+          schema: {type: integer, default: 30}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        "404": {$ref: "#/components/responses/ErrorResponse"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/libraries/search:
+    get:
+      tags: [Report]
+      summary: Search resource center libraries
+      operationId: searchLibraries
+      parameters:
+        - name: keyword
+          in: query
+          schema: {type: string}
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [qualification, standard, regulation]
+        - name: status
+          in: query
+          schema: {type: string}
+        - name: updated_from
+          in: query
+          schema: {type: string, format: date-time}
+        - name: updated_to
+          in: query
+          schema: {type: string, format: date-time}
+        - name: has_executor
+          in: query
+          schema: {type: boolean}
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/libraries/executor-vault:
+    get:
+      tags: [Report]
+      summary: Get executor credential vault
+      operationId: executorCredentialVault
+      parameters:
+        - name: executor_ref
+          in: query
+          required: true
+          schema: {type: string}
+        - name: drawing_limit
+          in: query
+          schema: {type: integer, default: 20}
       responses:
         "200": {$ref: "#/components/responses/GenericSuccess"}
         default: {$ref: "#/components/responses/ErrorResponse"}
@@ -1738,6 +1860,20 @@ paths:
           schema: {type: string}
         - name: spu_ref
           in: query
+          schema: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+
+  /public/v1/verify/achievement/{proof_hash}:
+    get:
+      tags: [Public]
+      summary: Verify one achievement by proof_hash
+      operationId: publicVerifyAchievementByProofHash
+      parameters:
+        - name: proof_hash
+          in: path
+          required: true
           schema: {type: string}
       responses:
         "200": {$ref: "#/components/responses/GenericSuccess"}

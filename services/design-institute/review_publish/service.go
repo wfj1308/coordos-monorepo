@@ -530,7 +530,8 @@ func (s *Service) createReviewCertUTXO(ctx context.Context, in VerifyReviewInput
 	if !ok {
 		return "", nil
 	}
-	utxoRef := fmt.Sprintf("v://%d/utxo/review/%d", s.tenantID, consumption.ConsumedAt.UnixNano())
+	ns := namespaceFromProjectRef(strings.TrimSpace(in.ProjectRef))
+	utxoRef := fmt.Sprintf("v://%s/utxo/review/%d", ns, consumption.ConsumedAt.UnixNano())
 	payload, _ := json.Marshal(map[string]any{
 		"project_ref":           strings.TrimSpace(in.ProjectRef),
 		"executor_ref":          strings.TrimSpace(in.ExecutorRef),
@@ -554,6 +555,23 @@ func (s *Service) createReviewCertUTXO(ctx context.Context, in VerifyReviewInput
 		return "", err
 	}
 	return utxoRef, nil
+}
+
+func namespaceFromProjectRef(projectRef string) string {
+	ref := strings.TrimSpace(strings.ToLower(projectRef))
+	if strings.HasPrefix(ref, "v://cn.zhongbei/") {
+		return "cn.zhongbei"
+	}
+	if strings.HasPrefix(ref, "v://zhongbei/") || strings.HasPrefix(ref, "v://10000/") {
+		return "cn.zhongbei"
+	}
+	if strings.HasPrefix(ref, "v://") {
+		without := strings.TrimPrefix(ref, "v://")
+		if idx := strings.IndexByte(without, '/'); idx > 0 {
+			return strings.TrimSpace(without[:idx])
+		}
+	}
+	return "cn.zhongbei"
 }
 
 // ══════════════════════════════════════════════════════════════

@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -187,13 +188,13 @@ func (s *Service) Products() ([]*Product, error) {
 		ClosureChain []catalogChainItem `json:"closure_chain"`
 	}
 
-	raw, err := os.ReadFile(s.catalogPath)
+	raw, resolvedPath, err := readCatalogFile(s.catalogPath)
 	if err != nil {
 		return nil, fmt.Errorf("read spu catalog failed: %w", err)
 	}
 	var cat catalogFile
 	if err := json.Unmarshal(raw, &cat); err != nil {
-		return nil, fmt.Errorf("parse spu catalog failed: %w", err)
+		return nil, fmt.Errorf("parse spu catalog failed at %s: %w", resolvedPath, err)
 	}
 
 	out := make([]*Product, 0, len(cat.ClosureChain))
@@ -209,6 +210,53 @@ func (s *Service) Products() ([]*Product, error) {
 		})
 	}
 	return out, nil
+}
+
+func readCatalogFile(path string) ([]byte, string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		path = "specs/spu/bridge/catalog.v1.json"
+	}
+	candidates := buildCatalogCandidates(path)
+	var lastErr error
+	for _, candidate := range candidates {
+		raw, err := os.ReadFile(candidate)
+		if err == nil {
+			return raw, candidate, nil
+		}
+		lastErr = err
+	}
+	return nil, "", fmt.Errorf("%w (candidates=%v)", lastErr, candidates)
+}
+
+func buildCatalogCandidates(path string) []string {
+	clean := filepath.Clean(path)
+	candidates := []string{clean}
+	if filepath.IsAbs(clean) {
+		return candidates
+	}
+	// Running from services/design-institute: ../../specs/...
+	candidates = append(candidates, filepath.Clean(filepath.Join("..", "..", clean)))
+	// Running from repository root with explicit services path.
+	candidates = append(candidates, filepath.Clean(filepath.Join("services", "design-institute", clean)))
+	return uniqueStrings(candidates)
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	return out
 }
 
 func (s *Service) Achievements(ctx context.Context, f AchievementFilter) ([]*PublicAchievement, int, error) {
@@ -813,7 +861,17 @@ var zhongbeiQualificationDisplayByGenesisRef = map[string]qualificationDisplayDe
 		Scope:    []string{"公路", "特大桥梁", "特长隧道", "交通工程"},
 		IssuedBy: "住房和城乡建设部",
 	},
+	"v://cn.zhongbei/genesis/qual/highway_a": {
+		Label:    "公路行业（公路、特大桥梁、特长隧道、交通工程）专业甲级",
+		Scope:    []string{"公路", "特大桥梁", "特长隧道", "交通工程"},
+		IssuedBy: "住房和城乡建设部",
+	},
 	"v://zhongbei/genesis/qual/municipal_a": {
+		Label:    "市政行业（排水工程、城镇燃气工程、道路工程、桥梁工程）专业甲级",
+		Scope:    []string{"排水工程", "城镇燃气工程", "道路工程", "桥梁工程"},
+		IssuedBy: "住房和城乡建设部",
+	},
+	"v://cn.zhongbei/genesis/qual/municipal_a": {
 		Label:    "市政行业（排水工程、城镇燃气工程、道路工程、桥梁工程）专业甲级",
 		Scope:    []string{"排水工程", "城镇燃气工程", "道路工程", "桥梁工程"},
 		IssuedBy: "住房和城乡建设部",
@@ -823,12 +881,27 @@ var zhongbeiQualificationDisplayByGenesisRef = map[string]qualificationDisplayDe
 		Scope:    []string{"建筑工程", "建筑装饰工程", "建筑幕墙工程", "轻型钢结构工程", "建筑智能化系统", "照明工程", "消防设施工程"},
 		IssuedBy: "住房和城乡建设部",
 	},
+	"v://cn.zhongbei/genesis/qual/arch_a": {
+		Label:    "建筑行业（建筑工程）甲级",
+		Scope:    []string{"建筑工程", "建筑装饰工程", "建筑幕墙工程", "轻型钢结构工程", "建筑智能化系统", "照明工程", "消防设施工程"},
+		IssuedBy: "住房和城乡建设部",
+	},
 	"v://zhongbei/genesis/qual/landscape_a": {
 		Label:    "风景园林工程设计专项甲级",
 		Scope:    []string{"风景园林工程设计"},
 		IssuedBy: "住房和城乡建设部",
 	},
+	"v://cn.zhongbei/genesis/qual/landscape_a": {
+		Label:    "风景园林工程设计专项甲级",
+		Scope:    []string{"风景园林工程设计"},
+		IssuedBy: "住房和城乡建设部",
+	},
 	"v://zhongbei/genesis/qual/water_b": {
+		Label:    "水利行业乙级",
+		Scope:    []string{"水利工程"},
+		IssuedBy: "住房和城乡建设部",
+	},
+	"v://cn.zhongbei/genesis/qual/water_b": {
 		Label:    "水利行业乙级",
 		Scope:    []string{"水利工程"},
 		IssuedBy: "住房和城乡建设部",
@@ -898,7 +971,8 @@ func looksLikeMojibake(value string) bool {
 	if value == "" {
 		return false
 	}
-	if strings.ContainsRune(value, '�') {
+	// 包含 Unicode 替换字符（U+FFFD）通常表示上游出现了编码损坏。
+	if strings.ContainsRune(value, '\uFFFD') {
 		return true
 	}
 	if containsHanRune(value) {
@@ -1082,11 +1156,16 @@ func normalizeGrade(raw string) string {
 
 func sortPartnerQualifications(items []PartnerQualificationItem) {
 	order := map[string]int{
-		"v://zhongbei/genesis/qual/highway_a":   0,
-		"v://zhongbei/genesis/qual/municipal_a": 1,
-		"v://zhongbei/genesis/qual/arch_a":      2,
-		"v://zhongbei/genesis/qual/landscape_a": 3,
-		"v://zhongbei/genesis/qual/water_b":     4,
+		"v://zhongbei/genesis/qual/highway_a":      0,
+		"v://cn.zhongbei/genesis/qual/highway_a":   0,
+		"v://zhongbei/genesis/qual/municipal_a":    1,
+		"v://cn.zhongbei/genesis/qual/municipal_a": 1,
+		"v://zhongbei/genesis/qual/arch_a":         2,
+		"v://cn.zhongbei/genesis/qual/arch_a":      2,
+		"v://zhongbei/genesis/qual/landscape_a":    3,
+		"v://cn.zhongbei/genesis/qual/landscape_a": 3,
+		"v://zhongbei/genesis/qual/water_b":        4,
+		"v://cn.zhongbei/genesis/qual/water_b":     4,
 	}
 	sort.SliceStable(items, func(i, j int) bool {
 		li, iok := order[strings.TrimSpace(items[i].GenesisRef)]

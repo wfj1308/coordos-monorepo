@@ -11,6 +11,7 @@ import (
 
 	"coordos/design-institute/achievement"
 	"coordos/design-institute/achievementprofile"
+	"coordos/design-institute/anchor"
 	"coordos/design-institute/api"
 	"coordos/design-institute/approve"
 	"coordos/design-institute/bid"
@@ -42,11 +43,13 @@ import (
 )
 
 type config struct {
-	Addr              string
-	PGDSN             string
-	TenantID          int
-	HeadOfficeRefBase string
-	SPUCatalogPath    string
+	Addr                    string
+	PGDSN                   string
+	TenantID                int
+	HeadOfficeRefBase       string
+	SPUCatalogPath          string
+	ProofAnchorEnabled      bool
+	ProofAnchorScanInterval time.Duration
 }
 
 func main() {
@@ -67,6 +70,8 @@ func main() {
 	if err := db.PingContext(ctx); err != nil {
 		log.Fatalf("ping postgres failed: %v", err)
 	}
+	runtimeCtx, runtimeCancel := context.WithCancel(context.Background())
+	defer runtimeCancel()
 	compatCtx, compatCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer compatCancel()
 	if err := ensureSchemaCompat(compatCtx, db); err != nil {
@@ -100,7 +105,11 @@ func main() {
 	registerSvc := register.NewService(db, cfg.TenantID)
 	reviewPublishSvc := review_publish.NewService(review_publish.NewPGStore(db), cfg.TenantID)
 	stepAchievementSvc := stepachievement.NewService(db, cfg.TenantID)
+	anchorSvc := anchor.NewService(anchor.NewRepository(db), log.Default())
 	achievementSvc.SetRule002Checker(qualificationSvc)
+	if cfg.ProofAnchorEnabled {
+		go anchorSvc.Run(runtimeCtx, cfg.ProofAnchorScanInterval)
+	}
 
 	approveSvc.SetCallbacks(
 		func(context.Context, approve.BizType, int64) error { return nil },
@@ -305,6 +314,27 @@ func ensureSchemaCompat(ctx context.Context, db *sql.DB) error {
 		`ALTER TABLE drawing_versions ADD COLUMN IF NOT EXISTS proof_hash VARCHAR(128)`,
 		`CREATE INDEX IF NOT EXISTS idx_drawing_versions_proof
 		   ON drawing_versions(tenant_id, proof_hash)`,
+		`CREATE TABLE IF NOT EXISTS proof_anchors (
+			id BIGSERIAL PRIMARY KEY,
+			proof_hash VARCHAR(255) NOT NULL UNIQUE,
+			ref VARCHAR(500) NOT NULL,
+			tenant_id INT NOT NULL DEFAULT 10000,
+			status VARCHAR(20) NOT NULL DEFAULT 'PENDING'
+				CHECK (status IN ('PENDING','ANCHORED','FAILED')),
+			anchor_chain VARCHAR(50),
+			anchor_tx_hash VARCHAR(255),
+			anchor_block BIGINT,
+			anchored_at TIMESTAMPTZ,
+			error TEXT,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_proof_anchors_ref
+		   ON proof_anchors(ref)`,
+		`CREATE INDEX IF NOT EXISTS idx_proof_anchors_status
+		   ON proof_anchors(status, tenant_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_proof_anchors_tx
+		   ON proof_anchors(anchor_chain, anchor_tx_hash)`,
 		`CREATE TABLE IF NOT EXISTS review_opinions (
 			id                BIGSERIAL PRIMARY KEY,
 			project_ref       VARCHAR(500) NOT NULL,
@@ -470,6 +500,27 @@ func ensureSchemaCompat(ctx context.Context, db *sql.DB) error {
 		 LEFT JOIN resource_bindings rb ON rb.achievement_utxo_id = a.id
 		 LEFT JOIN qualifications q ON q.id = rb.credential_id
 		 LEFT JOIN employees emp ON emp.executor_ref = a.executor_ref`,
+		`CREATE OR REPLACE VIEW credential_vault AS
+		 SELECT q.tenant_id,
+		        COALESCE(q.executor_ref, '') AS executor_ref,
+		        q.id AS qualification_id,
+		        q.qual_type,
+		        COALESCE(q.holder_name, '') AS holder_name,
+		        COALESCE(q.cert_no, '') AS cert_no,
+		        q.status AS qualification_status,
+		        q.valid_until,
+		        q.updated_at,
+		        COALESCE(qa.assignment_count, 0) AS assignment_count,
+		        qa.last_assignment_at
+		 FROM qualifications q
+		 LEFT JOIN LATERAL (
+		   SELECT COUNT(*)::INT AS assignment_count,
+		          MAX(created_at) AS last_assignment_at
+		   FROM qualification_assignments a
+		   WHERE a.tenant_id = q.tenant_id
+		     AND a.qualification_id = q.id
+		 ) qa ON TRUE
+		 WHERE COALESCE(q.deleted, FALSE) = FALSE`,
 	}
 	for _, stmt := range statements {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {

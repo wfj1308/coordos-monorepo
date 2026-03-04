@@ -194,7 +194,7 @@ func (s *Service) BuildFromLegacyContract(ctx context.Context, contractID int64,
 	}
 
 	if in.ParentRef == nil {
-		defaultOwner := "v://zhongbei/executor/owner/default"
+		defaultOwner := "v://cn.zhongbei/executor/owner/default"
 		in.OwnerRef = &defaultOwner
 		return s.CreateRoot(ctx, in)
 	}
@@ -260,7 +260,7 @@ func (s *Service) genRef(kind, name string) string {
 	if len(slug) > 20 {
 		slug = slug[:20]
 	}
-	return fmt.Sprintf("v://zhongbei/project/%s/%s-%d", kind, slug, time.Now().UnixNano())
+	return fmt.Sprintf("v://cn.zhongbei/project/%s/%s-%d", kind, slug, time.Now().UnixNano())
 }
 
 func (s *Service) computeHash(n *ProjectNode) string {

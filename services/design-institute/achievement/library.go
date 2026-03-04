@@ -532,10 +532,15 @@ func (s *Service) VerifyLibraryRef(ctx context.Context, ref string) (map[string]
 	if ref == "" {
 		return nil, fmt.Errorf("ref is required")
 	}
+	canonicalRef := s.resolveRefAlias(ctx, db, ref)
 
 	var project struct {
 		Ref          string
+		UTXORef      string
 		NamespaceRef string
+		SPURef       string
+		ProjectRef   string
+		ExecutorRef  string
 		InputsHash   string
 		Source       string
 		ProofHash    string
@@ -543,16 +548,34 @@ func (s *Service) VerifyLibraryRef(ctx context.Context, ref string) (map[string]
 		ProjectName  string
 		ProjectType  string
 		OwnerName    string
+		Payload      json.RawMessage
 	}
 	err = db.QueryRowContext(ctx, `
-		SELECT ref, namespace_ref, COALESCE(inputs_hash,''), COALESCE(source,''), COALESCE(proof_hash,''), COALESCE(status,''),
-		       COALESCE(project_name,''), COALESCE(project_type,''), COALESCE(owner_name,'')
+		SELECT
+			COALESCE(ref,''),
+			COALESCE(utxo_ref,''),
+			COALESCE(namespace_ref,''),
+			COALESCE(spu_ref,''),
+			COALESCE(project_ref,''),
+			COALESCE(executor_ref,''),
+			COALESCE(inputs_hash,''),
+			COALESCE(source,''),
+			COALESCE(proof_hash,''),
+			COALESCE(status,''),
+			COALESCE(project_name,''),
+			COALESCE(project_type,''),
+			COALESCE(owner_name,''),
+			COALESCE(payload,'{}'::jsonb)
 		FROM achievement_utxos
-		WHERE ref=$1
+		WHERE ref=$1 OR utxo_ref=$1 OR ref=$2 OR utxo_ref=$2
 		LIMIT 1
-	`, ref).Scan(
+	`, ref, canonicalRef).Scan(
 		&project.Ref,
+		&project.UTXORef,
 		&project.NamespaceRef,
+		&project.SPURef,
+		&project.ProjectRef,
+		&project.ExecutorRef,
 		&project.InputsHash,
 		&project.Source,
 		&project.ProofHash,
@@ -560,11 +583,54 @@ func (s *Service) VerifyLibraryRef(ctx context.Context, ref string) (map[string]
 		&project.ProjectName,
 		&project.ProjectType,
 		&project.OwnerName,
+		&project.Payload,
 	)
 	if err == nil {
-		recomputed := hashSHA256(project.Ref, project.InputsHash, project.Source, project.NamespaceRef)
+		resolvedRef := strings.TrimSpace(project.Ref)
+		if resolvedRef == "" {
+			resolvedRef = strings.TrimSpace(project.UTXORef)
+		}
+
+		candidates := make([]string, 0, 6)
+		if resolvedRef != "" && project.InputsHash != "" && project.Source != "" && project.NamespaceRef != "" {
+			candidates = append(candidates, hashSHA256(resolvedRef, project.InputsHash, project.Source, project.NamespaceRef))
+		}
+		if project.SPURef != "" && project.ProjectRef != "" && project.ExecutorRef != "" {
+			candidates = append(candidates, ComputeProofHash(project.SPURef, project.ProjectRef, project.ExecutorRef, project.Payload))
+		}
+		if project.SPURef != "" && project.ProjectRef != "" && project.ExecutorRef != "" && resolvedRef != "" {
+			rawNS := extractNamespaceFromRef(resolvedRef)
+			if rawNS != "" {
+				candidates = append(candidates, ComputeProofHashWithNamespace(project.SPURef, project.ProjectRef, project.ExecutorRef, rawNS, project.Payload))
+			}
+		}
+		if project.SPURef != "" && project.ProjectRef != "" && project.ExecutorRef != "" && project.NamespaceRef != "" {
+			ns := strings.TrimSpace(project.NamespaceRef)
+			candidates = append(candidates, ComputeProofHashWithNamespace(project.SPURef, project.ProjectRef, project.ExecutorRef, ns, project.Payload))
+			candidates = append(candidates, ComputeProofHashWithNamespace(project.SPURef, project.ProjectRef, project.ExecutorRef, strings.TrimPrefix(ns, "v://"), project.Payload))
+		}
+
+		recomputed := ""
+		verified := false
+		for _, candidate := range candidates {
+			if candidate == "" {
+				continue
+			}
+			if recomputed == "" {
+				recomputed = candidate
+			}
+			if hashEquals(project.ProofHash, candidate) {
+				recomputed = candidate
+				verified = true
+				break
+			}
+		}
+
 		return map[string]any{
-			"ref":             project.Ref,
+			"ref":             resolvedRef,
+			"query_ref":       ref,
+			"canonical_ref":   canonicalRef,
+			"utxo_ref":        project.UTXORef,
 			"type":            "achievement_utxo",
 			"project_name":    project.ProjectName,
 			"project_type":    project.ProjectType,
@@ -573,7 +639,7 @@ func (s *Service) VerifyLibraryRef(ctx context.Context, ref string) (map[string]
 			"status":          project.Status,
 			"proof_hash":      project.ProofHash,
 			"recomputed_hash": recomputed,
-			"verified":        project.ProofHash == recomputed,
+			"verified":        verified,
 		}, nil
 	}
 	if err != sql.ErrNoRows {
@@ -597,9 +663,9 @@ func (s *Service) VerifyLibraryRef(ctx context.Context, ref string) (map[string]
 		SELECT ref, achievement_ref, executor_ref, container_ref, COALESCE(role,''), COALESCE(inputs_hash,''),
 		       COALESCE(source,''), COALESCE(proof_hash,''), COALESCE(status,''), COALESCE(engineer_id,''), COALESCE(engineer_name,'')
 		FROM engineer_achievement_receipts
-		WHERE ref=$1
+		WHERE ref=$1 OR ref=$2
 		LIMIT 1
-	`, ref).Scan(
+	`, ref, canonicalRef).Scan(
 		&receipt.Ref,
 		&receipt.AchievementRef,
 		&receipt.ExecutorRef,
@@ -637,6 +703,27 @@ func (s *Service) VerifyLibraryRef(ctx context.Context, ref string) (map[string]
 		return nil, err
 	}
 	return nil, fmt.Errorf("ref not found: %s", ref)
+}
+
+func (s *Service) resolveRefAlias(ctx context.Context, db *sql.DB, ref string) string {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return ref
+	}
+	var canonical string
+	err := db.QueryRowContext(ctx, `
+		SELECT canonical_ref
+		FROM ref_aliases
+		WHERE tenant_id=$1
+		  AND alias_ref=$2
+		  AND status='ACTIVE'
+		ORDER BY id DESC
+		LIMIT 1
+	`, s.tenantID, ref).Scan(&canonical)
+	if err != nil || strings.TrimSpace(canonical) == "" {
+		return ref
+	}
+	return strings.TrimSpace(canonical)
 }
 
 func GenerateAchievementCSVTemplate() string {

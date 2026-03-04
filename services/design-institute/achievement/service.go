@@ -1,6 +1,7 @@
 package achievement
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -355,7 +356,21 @@ type CreateManualInput struct {
 }
 
 func (s *Service) GetByProofHash(ctx context.Context, proofHash string) (*AchievementUTXO, error) {
-	return s.store.GetByProofHash(ctx, proofHash)
+	proofHash = strings.TrimSpace(proofHash)
+	if proofHash == "" {
+		return nil, sql.ErrNoRows
+	}
+	item, err := s.store.GetByProofHash(ctx, proofHash)
+	if err == nil {
+		return item, nil
+	}
+	if err != sql.ErrNoRows {
+		return nil, err
+	}
+	if strings.HasPrefix(strings.ToLower(proofHash), "sha256:") {
+		return s.store.GetByProofHash(ctx, strings.TrimPrefix(proofHash, "sha256:"))
+	}
+	return s.store.GetByProofHash(ctx, "sha256:"+proofHash)
 }
 
 func (s *Service) ValidateAchievement(ctx context.Context, utxo *AchievementUTXO, projectNode map[string]any) error {
@@ -382,13 +397,14 @@ func (s *Service) ValidateAchievement(ctx context.Context, utxo *AchievementUTXO
 		payload = json.RawMessage("{}")
 	}
 	expected := ComputeProofHash(utxo.SPURef, utxo.ProjectRef, utxo.ExecutorRef, payload)
-	if utxo.ProofHash != expected {
-		return fmt.Errorf("proof_hash mismatch: expected %s, got %s", expected, utxo.ProofHash)
+	if !hashEquals(utxo.ProofHash, expected) {
+		return fmt.Errorf("proof_hash mismatch: expected %s (or sha256:%s), got %s", expected, expected, utxo.ProofHash)
 	}
 	return nil
 }
 
 func ComputeProofHash(spuRef, projectRef, executorRef string, payload json.RawMessage) string {
+	payload = canonicalizeJSON(payload)
 	h := sha256.New()
 	h.Write([]byte(spuRef))
 	h.Write([]byte(projectRef))
@@ -398,6 +414,7 @@ func ComputeProofHash(spuRef, projectRef, executorRef string, payload json.RawMe
 }
 
 func ComputeProofHashWithNamespace(spuRef, projectRef, executorRef, namespace string, payload json.RawMessage) string {
+	payload = canonicalizeJSON(payload)
 	h := sha256.New()
 	h.Write([]byte(spuRef))
 	h.Write([]byte(projectRef))
@@ -412,10 +429,18 @@ func (s *Service) CreateManual(ctx context.Context, in CreateManualInput) (*Achi
 		return nil, fmt.Errorf("project_ref and executor_ref are required")
 	}
 	if in.SPURef == "" {
-		in.SPURef = "v://zhongbei/spu/manual/document@v1"
+		in.SPURef = "v://cn.zhongbei/spu/manual/document@v1"
 	}
 	if in.Payload == nil {
 		in.Payload = json.RawMessage(`{}`)
+	}
+	in.Payload = canonicalizeJSON(in.Payload)
+	namespace := extractNamespaceFromRef(in.ProjectRef)
+	if namespace == "" {
+		namespace = extractNamespaceFromRef(in.ExecutorRef)
+	}
+	if namespace == "" {
+		namespace = "cn.zhongbei"
 	}
 	if s.rule002Checker != nil && strings.Contains(in.SPURef, "review_certificate") {
 		ok, err := s.rule002Checker.CheckValidForRule002(ctx, in.ExecutorRef)
@@ -428,13 +453,13 @@ func (s *Service) CreateManual(ctx context.Context, in CreateManualInput) (*Achi
 	}
 
 	a := &AchievementUTXO{
-		UTXORef:     fmt.Sprintf("v://zhongbei/utxo/manual/%d", time.Now().UnixNano()),
+		UTXORef:     fmt.Sprintf("v://%s/utxo/manual/%d", namespace, time.Now().UnixNano()),
 		SPURef:      in.SPURef,
 		ProjectRef:  in.ProjectRef,
 		ExecutorRef: in.ExecutorRef,
 		ContractID:  in.ContractID,
 		Payload:     &in.Payload,
-		ProofHash:   "",
+		ProofHash:   ComputeProofHashWithNamespace(in.SPURef, in.ProjectRef, in.ExecutorRef, namespace, in.Payload),
 		Status:      "PENDING",
 		Source:      "MANUAL",
 		TenantID:    s.tenantID,
@@ -452,4 +477,64 @@ func (s *Service) CreateManual(ctx context.Context, in CreateManualInput) (*Achi
 // BindCredential 绑定资质到业绩（用证留痕）
 func (s *Service) BindCredential(ctx context.Context, achievementID, credentialID int64, projectRef, executorRef string) error {
 	return s.store.BindCredential(ctx, achievementID, credentialID, projectRef, executorRef)
+}
+
+func extractNamespaceFromRef(ref string) string {
+	ref = strings.TrimSpace(ref)
+	if !strings.HasPrefix(ref, "v://") {
+		return ""
+	}
+	without := strings.TrimPrefix(ref, "v://")
+	if without == "" {
+		return ""
+	}
+	idx := strings.IndexByte(without, '/')
+	if idx <= 0 {
+		return normalizeNamespaceSegment(strings.ToLower(strings.TrimSpace(without)))
+	}
+	return normalizeNamespaceSegment(strings.ToLower(strings.TrimSpace(without[:idx])))
+}
+
+func normalizeNamespaceSegment(segment string) string {
+	switch strings.TrimSpace(strings.ToLower(segment)) {
+	case "", "10000", "zhongbei":
+		return "cn.zhongbei"
+	default:
+		return strings.TrimSpace(strings.ToLower(segment))
+	}
+}
+
+func normalizeHash(raw string) string {
+	v := strings.ToLower(strings.TrimSpace(raw))
+	v = strings.TrimPrefix(v, "sha256:")
+	return v
+}
+
+func hashEquals(actual string, candidates ...string) bool {
+	got := normalizeHash(actual)
+	if got == "" {
+		return false
+	}
+	for _, c := range candidates {
+		if got == normalizeHash(c) && normalizeHash(c) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func canonicalizeJSON(raw json.RawMessage) json.RawMessage {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return json.RawMessage(`{}`)
+	}
+	var v any
+	if err := json.Unmarshal(trimmed, &v); err != nil {
+		return json.RawMessage(trimmed)
+	}
+	normalized, err := json.Marshal(v)
+	if err != nil {
+		return json.RawMessage(trimmed)
+	}
+	return json.RawMessage(normalized)
 }

@@ -51,7 +51,7 @@ func NewService(args ...any) *Service {
 	s := &Service{
 		specBasePath:      "specs",
 		tenantID:          10000,
-		headOfficeRefBase: "v://zhongbei/executor/headquarters",
+		headOfficeRefBase: "v://cn.zhongbei/executor/headquarters",
 	}
 
 	switch len(args) {

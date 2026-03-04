@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -27,15 +28,21 @@ type fileConfig struct {
 	Postgres struct {
 		DSN string `yaml:"dsn"`
 	} `yaml:"postgres"`
+	ProofAnchor struct {
+		Enabled            *bool `yaml:"enabled"`
+		ScanIntervalSecond int   `yaml:"scan_interval_second"`
+	} `yaml:"proof_anchor"`
 }
 
 func loadConfig() config {
 	cfg := config{
-		Addr:              ":8090",
-		PGDSN:             "postgres://coordos:coordos@localhost:5432/coordos?sslmode=disable",
-		TenantID:          10000,
-		HeadOfficeRefBase: "v://zhongbei/executor/headquarters",
-		SPUCatalogPath:    "specs/spu/bridge/catalog.v1.json",
+		Addr:                    ":8090",
+		PGDSN:                   "postgres://coordos:coordos@localhost:5432/coordos?sslmode=disable",
+		TenantID:                10000,
+		HeadOfficeRefBase:       "v://cn.zhongbei/executor/headquarters",
+		SPUCatalogPath:          "specs/spu/bridge/catalog.v1.json",
+		ProofAnchorEnabled:      true,
+		ProofAnchorScanInterval: time.Minute,
 	}
 
 	fc, path, err := loadConfigFile()
@@ -58,6 +65,12 @@ func loadConfig() config {
 		if v := strings.TrimSpace(fc.SPU.CatalogPath); v != "" {
 			cfg.SPUCatalogPath = v
 		}
+		if fc.ProofAnchor.Enabled != nil {
+			cfg.ProofAnchorEnabled = *fc.ProofAnchor.Enabled
+		}
+		if fc.ProofAnchor.ScanIntervalSecond > 0 {
+			cfg.ProofAnchorScanInterval = time.Duration(fc.ProofAnchor.ScanIntervalSecond) * time.Second
+		}
 		log.Printf("config file loaded: %s", path)
 	}
 
@@ -75,6 +88,10 @@ func loadConfig() config {
 		cfg.SPUCatalogPath = v
 	}
 	cfg.TenantID = envIntOrDefault("DESIGN_INSTITUTE_TENANT_ID", cfg.TenantID)
+	cfg.ProofAnchorEnabled = envBoolOrDefault("DESIGN_INSTITUTE_PROOF_ANCHOR_ENABLED", cfg.ProofAnchorEnabled)
+	if sec := envIntOrDefault("DESIGN_INSTITUTE_PROOF_ANCHOR_SCAN_SECONDS", int(cfg.ProofAnchorScanInterval.Seconds())); sec > 0 {
+		cfg.ProofAnchorScanInterval = time.Duration(sec) * time.Second
+	}
 
 	// Compatibility with older docs/scripts.
 	// 1) DATABASE_URL for Postgres DSN.
@@ -118,6 +135,9 @@ func validateConfig(cfg config) {
 	}
 	if strings.TrimSpace(cfg.SPUCatalogPath) == "" {
 		log.Fatalf("invalid config: spu.catalog_path is empty")
+	}
+	if cfg.ProofAnchorScanInterval <= 0 {
+		log.Fatalf("invalid config: proof anchor scan interval must be positive")
 	}
 }
 
@@ -184,6 +204,22 @@ func envIntOrDefault(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+func envBoolOrDefault(key string, fallback bool) bool {
+	v := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+	if v == "" {
+		return fallback
+	}
+	switch v {
+	case "1", "true", "yes", "y", "on":
+		return true
+	case "0", "false", "no", "n", "off":
+		return false
+	default:
+		log.Printf("invalid %s=%q, fallback=%v", key, v, fallback)
+		return fallback
+	}
 }
 
 func normalizeHTTPAddr(raw string) string {

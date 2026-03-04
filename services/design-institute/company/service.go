@@ -20,28 +20,28 @@ const (
 )
 
 type Company struct {
-	ID              int
-	LegacyID        *int
-	Name            string
-	CompanyType     CompanyType
-	ParentID        *int
-	Code            string
-	LicenseNum      string
-	Charger         string
-	ChargerPhone    string
-	FinanceCharger  string
-	BankAccount     string
-	Address         string
-	AreaID          *int
-	ZoneID          *int64
-	Note            string
-	ExecutorRef     *string
-	GenesisRef      *string
-	Deleted         bool
-	TenantID        int
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-	MigrateStatus   string
+	ID             int
+	LegacyID       *int
+	Name           string
+	CompanyType    CompanyType
+	ParentID       *int
+	Code           string
+	LicenseNum     string
+	Charger        string
+	ChargerPhone   string
+	FinanceCharger string
+	BankAccount    string
+	Address        string
+	AreaID         *int
+	ZoneID         *int64
+	Note           string
+	ExecutorRef    *string
+	GenesisRef     *string
+	Deleted        bool
+	TenantID       int
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	MigrateStatus  string
 }
 
 type Store interface {
@@ -79,7 +79,7 @@ func (s *Service) GetBranches(ctx context.Context, parentID int) ([]*Company, er
 
 // 生成 executor_ref，迁移后调用
 func (s *Service) BindExecutorRef(ctx context.Context, id int) error {
-	ref := fmt.Sprintf("v://zhongbei/executor/branch/%d", id)
+	ref := fmt.Sprintf("v://cn.zhongbei/executor/branch/%d", id)
 	return s.store.SetExecutorRef(ctx, id, ref)
 }
 
@@ -124,7 +124,8 @@ func (s *PGStore) List(ctx context.Context, tenantID int, companyType *CompanyTy
 	where := "tenant_id=$1 AND deleted=FALSE"
 	args := []any{tenantID}
 	if companyType != nil {
-		where += " AND company_type=$2"; args = append(args, *companyType)
+		where += " AND company_type=$2"
+		args = append(args, *companyType)
 	}
 	var total int
 	s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM companies WHERE "+where, args...).Scan(&total)

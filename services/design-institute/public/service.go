@@ -44,8 +44,8 @@ type ProductSpec struct {
 	SPURef      string   `json:"spu_ref"`
 	Name        string   `json:"name"`
 	Domain      string   `json:"domain"`
-	Kind        string   `json:"kind"`      // DRAWING/RECORD/REPORT/CERT
-	Stage       string   `json:"stage"`     // 设计/施工/竣工/结算
+	Kind        string   `json:"kind"`  // DRAWING/RECORD/REPORT/CERT
+	Stage       string   `json:"stage"` // 设计/施工/竣工/结算
 	Description string   `json:"description"`
 	Tags        []string `json:"tags"`
 
@@ -57,53 +57,53 @@ type ProductSpec struct {
 }
 
 type ProductStats struct {
-	TotalDelivered  int     `json:"total_delivered"`   // 历史交付次数
-	AvgPassRate     float64 `json:"avg_pass_rate"`     // 平均通过率
-	RecentCount     int     `json:"recent_count"`      // 近1年交付次数
+	TotalDelivered int     `json:"total_delivered"` // 历史交付次数
+	AvgPassRate    float64 `json:"avg_pass_rate"`   // 平均通过率
+	RecentCount    int     `json:"recent_count"`    // 近1年交付次数
 }
 
 // ExecutorSummary 执行体摘要（对外版，脱敏）
 // 不暴露姓名、证书号、联系方式
 type ExecutorSummary struct {
 	// 用角色描述代替姓名
-	Role            string          `json:"role"`           // "注册结构工程师·高级"
-	CapabilityGrade string          `json:"capability_grade"` // SENIOR/EXPERT/MASTER
-	CapabilityLevel float64         `json:"capability_level"`
-	SpecialtySPUs   []string        `json:"specialty_spus"` // 擅长的SPU类型
-	YearlyPassRate  float64         `json:"yearly_pass_rate"`
-	Available       bool            `json:"available"`      // 当前是否可接单
-	RecentProjects  int             `json:"recent_projects"` // 近1年项目数
+	Role            string   `json:"role"`             // "注册结构工程师·高级"
+	CapabilityGrade string   `json:"capability_grade"` // SENIOR/EXPERT/MASTER
+	CapabilityLevel float64  `json:"capability_level"`
+	SpecialtySPUs   []string `json:"specialty_spus"` // 擅长的SPU类型
+	YearlyPassRate  float64  `json:"yearly_pass_rate"`
+	Available       bool     `json:"available"`       // 当前是否可接单
+	RecentProjects  int      `json:"recent_projects"` // 近1年项目数
 }
 
 // AchievementSummary 业绩摘要（对外版）
 // 附proof_hash，访客可独立验证
 type AchievementSummary struct {
-	ProjectName     string  `json:"project_name"`
-	SPUName         string  `json:"spu_name"`
+	ProjectName      string `json:"project_name"`
+	SPUName          string `json:"spu_name"`
 	ContractAmtRange string `json:"contract_amt_range"` // "100万-500万"（不暴露精确金额）
-	CompletedYear   int     `json:"completed_year"`
-	ProjectType     string  `json:"project_type"`
-	Province        string  `json:"province"`
+	CompletedYear    int    `json:"completed_year"`
+	ProjectType      string `json:"project_type"`
+	Province         string `json:"province"`
 
 	// 可验证性
-	UTXORef         string  `json:"utxo_ref"`
-	ProofHash       string  `json:"proof_hash"`
-	Verifiable      bool    `json:"verifiable"`  // 是否有proof_hash
-	Source          string  `json:"source"`       // MANUAL/TRIP_DERIVED
-	TrustLevel      int     `json:"trust_level"`  // 1-5星
+	UTXORef    string `json:"utxo_ref"`
+	ProofHash  string `json:"proof_hash"`
+	Verifiable bool   `json:"verifiable"`  // 是否有proof_hash
+	Source     string `json:"source"`      // MANUAL/TRIP_DERIVED
+	TrustLevel int    `json:"trust_level"` // 1-5星
 }
 
 // OrgCapabilityDecl 组织能力声明（对外版）
 type OrgCapabilityDecl struct {
-	OrgName         string    `json:"org_name"`
-	OrgRef          string    `json:"org_ref"`
-	DeclaredAt      time.Time `json:"declared_at"`
+	OrgName    string    `json:"org_name"`
+	OrgRef     string    `json:"org_ref"`
+	DeclaredAt time.Time `json:"declared_at"`
 
 	// 资质（来自 qualifications）
-	Qualifications  []QualDecl `json:"qualifications"`
+	Qualifications []QualDecl `json:"qualifications"`
 
 	// 人员能力分布（脱敏，只显示分布不显示个人）
-	PersonnelStats  PersonnelStats `json:"personnel_stats"`
+	PersonnelStats PersonnelStats `json:"personnel_stats"`
 
 	// 可承接的产品类型
 	ProductCapacity []ProductCapacity `json:"product_capacity"`
@@ -116,13 +116,13 @@ type OrgCapabilityDecl struct {
 }
 
 type QualDecl struct {
-	QualType    string `json:"qual_type"`
-	QualName    string `json:"qual_name"`
-	CertNo      string `json:"cert_no"`       // 企业资质证书号（公开信息）
-	IssuedBy    string `json:"issued_by"`
-	ValidUntil  string `json:"valid_until"`
-	Status      string `json:"status"`
-	Verifiable  string `json:"verifiable"`    // 核查方式说明
+	QualType   string `json:"qual_type"`
+	QualName   string `json:"qual_name"`
+	CertNo     string `json:"cert_no"` // 企业资质证书号（公开信息）
+	IssuedBy   string `json:"issued_by"`
+	ValidUntil string `json:"valid_until"`
+	Status     string `json:"status"`
+	Verifiable string `json:"verifiable"` // 核查方式说明
 }
 
 type PersonnelStats struct {
@@ -133,20 +133,20 @@ type PersonnelStats struct {
 }
 
 type ProductCapacity struct {
-	SPURef      string `json:"spu_ref"`
-	SPUName     string `json:"spu_name"`
-	Headcount   int    `json:"headcount"`     // 能执行的人数
+	SPURef      string  `json:"spu_ref"`
+	SPUName     string  `json:"spu_name"`
+	Headcount   int     `json:"headcount"`    // 能执行的人数
 	AvgLevel    float64 `json:"avg_level"`    // 平均能力等级
-	RecentCount int    `json:"recent_count"`  // 近1年执行次数
+	RecentCount int     `json:"recent_count"` // 近1年执行次数
 }
 
 // AddressResult 寻址结果——三类寻址的统一返回格式
 type AddressResult struct {
-	Query       string        `json:"query"`
-	QueryType   string        `json:"query_type"` // PRODUCT/EXECUTOR/CAPABILITY
-	MatchCount  int           `json:"match_count"`
-	Results     any           `json:"results"`
-	GeneratedAt time.Time     `json:"generated_at"`
+	Query       string    `json:"query"`
+	QueryType   string    `json:"query_type"` // PRODUCT/EXECUTOR/CAPABILITY
+	MatchCount  int       `json:"match_count"`
+	Results     any       `json:"results"`
+	GeneratedAt time.Time `json:"generated_at"`
 }
 
 // ── Service ───────────────────────────────────────────────────
@@ -319,8 +319,8 @@ func (s *Service) AddressExecutor(ctx context.Context, spuRef string, minGrade s
 
 func (s *Service) DeclareCapability(ctx context.Context, nsRef string) (*OrgCapabilityDecl, error) {
 	decl := &OrgCapabilityDecl{
-		OrgRef:      nsRef,
-		DeclaredAt:  time.Now(),
+		OrgRef:           nsRef,
+		DeclaredAt:       time.Now(),
 		VerificationNote: "所有业绩UTXO附proof_hash，可通过 GET /public/v1/verify/{utxo_ref} 独立验证",
 	}
 
@@ -484,7 +484,9 @@ func (s *Service) DeclareCapability(ctx context.Context, nsRef string) (*OrgCapa
 			var yr int
 			achRows.Scan(&utxoRef, &spuRef, &proofHash, &projName, &amount, &yr, &owner, &src)
 			trust := 2
-			if src == "TRIP_DERIVED" { trust = 5 }
+			if src == "TRIP_DERIVED" {
+				trust = 5
+			}
 
 			decl.RecentAchievements = append(decl.RecentAchievements, AchievementSummary{
 				ProjectName:      projName,
@@ -508,23 +510,41 @@ func (s *Service) DeclareCapability(ctx context.Context, nsRef string) (*OrgCapa
 // ── UTXO 独立验证 ─────────────────────────────────────────────
 
 type VerifyResult struct {
-	UTXORef     string    `json:"utxo_ref"`
-	Exists      bool      `json:"exists"`
-	ProofHash   string    `json:"proof_hash"`
-	Status      string    `json:"status"`
-	SPURef      string    `json:"spu_ref"`
-	IngestedAt  time.Time `json:"ingested_at"`
+	UTXORef    string    `json:"utxo_ref"`
+	Exists     bool      `json:"exists"`
+	ProofHash  string    `json:"proof_hash"`
+	Status     string    `json:"status"`
+	SPURef     string    `json:"spu_ref"`
+	IngestedAt time.Time `json:"ingested_at"`
 	// 验证说明
-	VerifyNote  string    `json:"verify_note"`
+	VerifyNote string `json:"verify_note"`
 }
 
 func (s *Service) VerifyUTXO(ctx context.Context, utxoRef string) (*VerifyResult, error) {
 	r := &VerifyResult{UTXORef: utxoRef}
+	utxoRef = strings.TrimSpace(utxoRef)
+	canonicalRef := utxoRef
+	if canonicalRef != "" {
+		var mapped string
+		err := s.db.QueryRowContext(ctx, `
+			SELECT canonical_ref
+			FROM ref_aliases
+			WHERE tenant_id=$1
+			  AND alias_ref=$2
+			  AND status='ACTIVE'
+			ORDER BY id DESC
+			LIMIT 1
+		`, s.tenantID, canonicalRef).Scan(&mapped)
+		if err == nil && strings.TrimSpace(mapped) != "" {
+			canonicalRef = strings.TrimSpace(mapped)
+		}
+	}
 
 	err := s.db.QueryRowContext(ctx, `
 		SELECT utxo_ref, proof_hash, status, spu_ref, ingested_at
-		FROM achievement_utxos WHERE utxo_ref=$1
-	`, utxoRef).Scan(
+		FROM achievement_utxos WHERE utxo_ref=$1 OR utxo_ref=$2
+		LIMIT 1
+	`, utxoRef, canonicalRef).Scan(
 		&r.UTXORef, &r.ProofHash, &r.Status, &r.SPURef, &r.IngestedAt,
 	)
 	if err == sql.ErrNoRows {
@@ -548,16 +568,16 @@ func (s *Service) VerifyUTXO(ctx context.Context, utxoRef string) (*VerifyResult
 
 func certLabel(qualType string) string {
 	labels := map[string]string{
-		"REG_STRUCTURE": "注册结构工程师",
-		"REG_ARCH":      "注册建筑师",
-		"REG_CIVIL":     "注册岩土工程师",
-		"REG_COST":      "注册造价工程师",
-		"REG_SURVEY":    "注册测量师",
-		"REG_ELECTRIC":  "注册电气工程师",
-		"REG_MECH":      "注册机械工程师",
-		"REG_SAFETY":    "注册安全工程师",
+		"REG_STRUCTURE":   "注册结构工程师",
+		"REG_ARCH":        "注册建筑师",
+		"REG_CIVIL":       "注册岩土工程师",
+		"REG_COST":        "注册造价工程师",
+		"REG_SURVEY":      "注册测量师",
+		"REG_ELECTRIC":    "注册电气工程师",
+		"REG_MECH":        "注册机械工程师",
+		"REG_SAFETY":      "注册安全工程师",
 		"SENIOR_ENGINEER": "高级工程师",
-		"ENGINEER":      "工程师",
+		"ENGINEER":        "工程师",
 	}
 	if l, ok := labels[qualType]; ok {
 		return l

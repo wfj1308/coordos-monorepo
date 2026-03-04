@@ -229,12 +229,17 @@ func (h *Handler) registerRoutes() {
 	h.mux.HandleFunc("GET /api/v1/approvals/biz", h.handleApproveByBiz)
 
 	h.mux.HandleFunc("GET /api/v1/reports/overview", h.handleReportOverview)
+	h.mux.HandleFunc("GET /api/v1/reports/three-libraries", h.handleReportThreeLibraries)
 	h.mux.HandleFunc("GET /api/v1/reports/company", h.handleReportCompany)
 	h.mux.HandleFunc("GET /api/v1/reports/contracts/{id}", h.handleReportContract)
 	h.mux.HandleFunc("GET /api/v1/reports/gathering-progress", h.handleReportGatheringProgress)
 	h.mux.HandleFunc("GET /api/v1/reports/employees", h.handleReportEmployee)
 	h.mux.HandleFunc("GET /api/v1/reports/qualification", h.handleReportQualification)
 	h.mux.HandleFunc("GET /api/v1/reports/risk-events", h.handleReportRiskEvents)
+	h.mux.HandleFunc("GET /api/v1/libraries/search", h.handleLibrarySearch)
+	h.mux.HandleFunc("GET /api/v1/libraries/{type}/{id}/relations", h.handleLibraryRelations)
+	h.mux.HandleFunc("GET /api/v1/libraries/{type}/{id}", h.handleLibraryDetail)
+	h.mux.HandleFunc("GET /api/v1/libraries/executor-vault", h.handleExecutorCredentialVault)
 
 	h.mux.HandleFunc("POST /api/v1/resolve/verify", h.handleResolveVerify)
 	h.mux.HandleFunc("POST /api/v1/resolve/candidates", h.handleResolveCandidates)
@@ -1983,6 +1988,63 @@ func (h *Handler) handleReportOverview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+func (h *Handler) handleReportThreeLibraries(w http.ResponseWriter, r *http.Request) {
+	if h.reportSvc == nil {
+		writeError(w, http.StatusNotImplemented, "report service is disabled")
+		return
+	}
+
+	parseWindow := func(limitKey, offsetKey string) (int, int, error) {
+		limit := 20
+		offset := 0
+		if v := queryString(r, limitKey); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n <= 0 {
+				return 0, 0, fmt.Errorf("invalid %s", limitKey)
+			}
+			limit = n
+		}
+		if v := queryString(r, offsetKey); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 0 {
+				return 0, 0, fmt.Errorf("invalid %s", offsetKey)
+			}
+			offset = n
+		}
+		return limit, offset, nil
+	}
+
+	qualLimit, qualOffset, err := parseWindow("qualification_limit", "qualification_offset")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	standardLimit, standardOffset, err := parseWindow("standard_limit", "standard_offset")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	regLimit, regOffset, err := parseWindow("regulation_limit", "regulation_offset")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	out, err := h.reportSvc.GetThreeLibrariesOverview(r.Context(), report.ThreeLibrariesQuery{
+		QualificationLimit:  qualLimit,
+		QualificationOffset: qualOffset,
+		StandardLimit:       standardLimit,
+		StandardOffset:      standardOffset,
+		RegulationLimit:     regLimit,
+		RegulationOffset:    regOffset,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 func (h *Handler) handleReportCompany(w http.ResponseWriter, r *http.Request) {
 	from, to, err := rangeFromQuery(r)
 	if err != nil {
@@ -2089,6 +2151,180 @@ func (h *Handler) handleReportRiskEvents(w http.ResponseWriter, r *http.Request)
 		"total": len(out),
 		"data":  out,
 	})
+}
+
+func (h *Handler) handleLibrarySearch(w http.ResponseWriter, r *http.Request) {
+	if h.reportSvc == nil {
+		writeError(w, http.StatusNotImplemented, "report service is disabled")
+		return
+	}
+	limit, offset, err := pagination(r, 20)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	var updatedFromPtr *time.Time
+	if v := strings.TrimSpace(queryString(r, "updated_from")); v != "" {
+		t, parseErr := parseTime(v)
+		if parseErr != nil {
+			writeError(w, http.StatusBadRequest, "invalid updated_from")
+			return
+		}
+		updatedFromPtr = &t
+	}
+
+	var updatedToPtr *time.Time
+	if v := strings.TrimSpace(queryString(r, "updated_to")); v != "" {
+		t, parseErr := parseTime(v)
+		if parseErr != nil {
+			writeError(w, http.StatusBadRequest, "invalid updated_to")
+			return
+		}
+		updatedToPtr = &t
+	}
+
+	var hasExecutorPtr *bool
+	if v := strings.TrimSpace(queryString(r, "has_executor")); v != "" {
+		normalized := strings.ToLower(v)
+		val := false
+		switch normalized {
+		case "1", "true", "yes", "y":
+			val = true
+		case "0", "false", "no", "n":
+			val = false
+		default:
+			writeError(w, http.StatusBadRequest, "invalid has_executor")
+			return
+		}
+		hasExecutorPtr = &val
+	}
+
+	out, err := h.reportSvc.SearchLibraries(r.Context(), report.LibrarySearchQuery{
+		Keyword:     strings.TrimSpace(queryString(r, "keyword")),
+		Type:        strings.TrimSpace(queryString(r, "type")),
+		Status:      strings.TrimSpace(queryString(r, "status")),
+		UpdatedFrom: updatedFromPtr,
+		UpdatedTo:   updatedToPtr,
+		HasExecutor: hasExecutorPtr,
+		Limit:       limit,
+		Offset:      offset,
+	})
+	if err != nil {
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "unsupported library type") {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) handleLibraryRelations(w http.ResponseWriter, r *http.Request) {
+	if h.reportSvc == nil {
+		writeError(w, http.StatusNotImplemented, "report service is disabled")
+		return
+	}
+	libraryType := strings.TrimSpace(r.PathValue("type"))
+	if libraryType == "" {
+		writeError(w, http.StatusBadRequest, "library type is required")
+		return
+	}
+	id, err := pathInt64(r, "id")
+	if err != nil || id <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	limit := 30
+	if v := strings.TrimSpace(queryString(r, "limit")); v != "" {
+		n, convErr := strconv.Atoi(v)
+		if convErr != nil || n <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid limit")
+			return
+		}
+		limit = n
+	}
+	out, err := h.reportSvc.GetLibraryRelations(r.Context(), libraryType, id, report.LibraryRelationsQuery{
+		Limit: limit,
+	})
+	if err != nil {
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "unsupported library type") {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if out == nil {
+		writeError(w, http.StatusNotFound, "library item not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"type": libraryType,
+		"id":   id,
+		"data": out,
+	})
+}
+
+func (h *Handler) handleLibraryDetail(w http.ResponseWriter, r *http.Request) {
+	if h.reportSvc == nil {
+		writeError(w, http.StatusNotImplemented, "report service is disabled")
+		return
+	}
+	libraryType := strings.TrimSpace(r.PathValue("type"))
+	if libraryType == "" {
+		writeError(w, http.StatusBadRequest, "library type is required")
+		return
+	}
+	id, err := pathInt64(r, "id")
+	if err != nil || id <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	out, err := h.reportSvc.GetLibraryDetail(r.Context(), libraryType, id)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if out == nil {
+		writeError(w, http.StatusNotFound, "library item not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"type": libraryType,
+		"id":   id,
+		"data": out,
+	})
+}
+
+func (h *Handler) handleExecutorCredentialVault(w http.ResponseWriter, r *http.Request) {
+	if h.reportSvc == nil {
+		writeError(w, http.StatusNotImplemented, "report service is disabled")
+		return
+	}
+	executorRef := strings.TrimSpace(queryString(r, "executor_ref"))
+	if executorRef == "" {
+		writeError(w, http.StatusBadRequest, "executor_ref is required")
+		return
+	}
+	drawingLimit := 20
+	if v := strings.TrimSpace(queryString(r, "drawing_limit")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid drawing_limit")
+			return
+		}
+		drawingLimit = n
+	}
+	out, err := h.reportSvc.GetExecutorCredentialVault(r.Context(), executorRef, drawingLimit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (h *Handler) handleResolveVerify(w http.ResponseWriter, r *http.Request) {
@@ -3993,7 +4229,7 @@ func decodeJSON(r *http.Request, out any) error {
 }
 
 func writeJSON(w http.ResponseWriter, code int, body any) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(body)
 }
@@ -4211,6 +4447,9 @@ func extractContractIDFromRef(ref string) (int64, bool) {
 func buildContractRef(tenantID int, contractID int64) string {
 	if tenantID <= 0 {
 		tenantID = 10000
+	}
+	if tenantID == 10000 {
+		return fmt.Sprintf("v://cn.zhongbei/finance/contract/%d@v1", contractID)
 	}
 	return fmt.Sprintf("v://%d/contract/%d", tenantID, contractID)
 }

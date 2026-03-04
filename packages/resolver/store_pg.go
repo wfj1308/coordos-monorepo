@@ -7,30 +7,22 @@ import (
 	"strings"
 	"time"
 
+	"coordos/vuri"
 	_ "github.com/lib/pq"
 )
 
-// ── Store 接口 ────────────────────────────────────────────────
-
+// Store defines resolver data access contract.
 type Store interface {
-	// 证书查询
-	GetCredentials(ctx context.Context, holderRef string, validOn time.Time) ([]*Credential, error)
+	GetCredentials(ctx context.Context, holderRef vuri.VRef, validOn time.Time) ([]*Credential, error)
 	GetCredentialsByType(ctx context.Context, tenantID int, certType CertType, validOn time.Time) ([]*Credential, error)
 	CreateCredential(ctx context.Context, c *Credential) (int64, error)
 	RevokeCredential(ctx context.Context, id int64, reason string) error
-
-	// 执行体活跃项目查询（用于 Occupied 计算）
-	GetActiveProjects(ctx context.Context, executorRef string) ([]OccupiedProject, error)
-
-	// 执行体基本信息（名字等，从 employee 表读取）
-	GetExecutorName(ctx context.Context, executorRef string) (string, error)
-
-	// 项目执行体列表（用于 Resolve）
-	ListExecutorsByTenant(ctx context.Context, tenantID int) ([]string, error)
+	GetActiveProjects(ctx context.Context, executorRef vuri.VRef) ([]OccupiedProject, error)
+	GetExecutorName(ctx context.Context, executorRef vuri.VRef) (string, error)
+	ListExecutorsByTenant(ctx context.Context, tenantID int) ([]vuri.VRef, error)
 }
 
-// ── PostgreSQL 实现 ───────────────────────────────────────────
-
+// PGStore is the PostgreSQL store implementation.
 type PGStore struct {
 	db *sql.DB
 }
@@ -39,8 +31,7 @@ func NewPGStore(db *sql.DB) Store {
 	return &PGStore{db: db}
 }
 
-// GetCredentials 查某个执行体在指定时间点的有效证书
-func (s *PGStore) GetCredentials(ctx context.Context, holderRef string, validOn time.Time) ([]*Credential, error) {
+func (s *PGStore) GetCredentials(ctx context.Context, holderRef vuri.VRef, validOn time.Time) ([]*Credential, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, holder_ref, holder_type, cert_type, cert_number,
 		       issued_at, expires_at, scope, status, tenant_id, created_at, updated_at
@@ -51,13 +42,12 @@ func (s *PGStore) GetCredentials(ctx context.Context, holderRef string, validOn 
 		ORDER BY cert_type, expires_at DESC NULLS LAST
 	`, holderRef, validOn)
 	if err != nil {
-		return nil, fmt.Errorf("查询证书失败: %w", err)
+		return nil, fmt.Errorf("query credentials failed: %w", err)
 	}
 	defer rows.Close()
 	return s.scanCredentials(rows)
 }
 
-// GetCredentialsByType 按证书类型查全租户的有效持证人
 func (s *PGStore) GetCredentialsByType(ctx context.Context, tenantID int, certType CertType, validOn time.Time) ([]*Credential, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, holder_ref, holder_type, cert_type, cert_number,
@@ -70,15 +60,14 @@ func (s *PGStore) GetCredentialsByType(ctx context.Context, tenantID int, certTy
 		ORDER BY holder_ref
 	`, tenantID, string(certType), validOn)
 	if err != nil {
-		return nil, fmt.Errorf("按类型查询证书失败: %w", err)
+		return nil, fmt.Errorf("query credentials by type failed: %w", err)
 	}
 	defer rows.Close()
 	return s.scanCredentials(rows)
 }
 
-// CreateCredential 录入证书
 func (s *PGStore) CreateCredential(ctx context.Context, c *Credential) (int64, error) {
-	scope := strings.Join(c.Scope, ",")
+	scope := joinVRefs(c.Scope)
 	var id int64
 	err := s.db.QueryRowContext(ctx, `
 		INSERT INTO credentials
@@ -91,12 +80,11 @@ func (s *PGStore) CreateCredential(ctx context.Context, c *Credential) (int64, e
 		c.IssuedAt, c.ExpiresAt, scope, c.Status, c.TenantID,
 	).Scan(&id)
 	if err != nil {
-		return 0, fmt.Errorf("创建证书失败: %w", err)
+		return 0, fmt.Errorf("create credential failed: %w", err)
 	}
 	return id, nil
 }
 
-// RevokeCredential 吊销证书
 func (s *PGStore) RevokeCredential(ctx context.Context, id int64, reason string) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE credentials
@@ -106,8 +94,7 @@ func (s *PGStore) RevokeCredential(ctx context.Context, id int64, reason string)
 	return err
 }
 
-// GetActiveProjects 查执行体当前在建项目（从 project_nodes + achievement_utxos 联查）
-func (s *PGStore) GetActiveProjects(ctx context.Context, executorRef string) ([]OccupiedProject, error) {
+func (s *PGStore) GetActiveProjects(ctx context.Context, executorRef vuri.VRef) ([]OccupiedProject, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT DISTINCT
 		       p.ref,
@@ -129,7 +116,7 @@ func (s *PGStore) GetActiveProjects(ctx context.Context, executorRef string) ([]
 		ORDER BY p.created_at DESC
 	`, executorRef)
 	if err != nil {
-		return nil, fmt.Errorf("查询在建项目失败: %w", err)
+		return nil, fmt.Errorf("query active projects failed: %w", err)
 	}
 	defer rows.Close()
 
@@ -144,20 +131,18 @@ func (s *PGStore) GetActiveProjects(ctx context.Context, executorRef string) ([]
 	return result, rows.Err()
 }
 
-// GetExecutorName 从 employees 表读取显示名
-func (s *PGStore) GetExecutorName(ctx context.Context, executorRef string) (string, error) {
+func (s *PGStore) GetExecutorName(ctx context.Context, executorRef vuri.VRef) (string, error) {
 	var name string
 	err := s.db.QueryRowContext(ctx, `
 		SELECT name FROM employees WHERE executor_ref = $1 LIMIT 1
 	`, executorRef).Scan(&name)
 	if err == sql.ErrNoRows {
-		return executorRef, nil // 找不到就直接返回 ref
+		return string(executorRef), nil
 	}
 	return name, err
 }
 
-// ListExecutorsByTenant 列出租户内所有有效 executor_ref（用于 Resolve 遍历）
-func (s *PGStore) ListExecutorsByTenant(ctx context.Context, tenantID int) ([]string, error) {
+func (s *PGStore) ListExecutorsByTenant(ctx context.Context, tenantID int) ([]vuri.VRef, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT DISTINCT executor_ref
 		FROM employees
@@ -171,18 +156,17 @@ func (s *PGStore) ListExecutorsByTenant(ctx context.Context, tenantID int) ([]st
 	}
 	defer rows.Close()
 
-	var refs []string
+	var refs []vuri.VRef
 	for rows.Next() {
 		var ref string
 		if err := rows.Scan(&ref); err != nil {
 			return nil, err
 		}
-		refs = append(refs, ref)
+		refs = append(refs, vuri.VRef(ref))
 	}
 	return refs, rows.Err()
 }
 
-// scanCredentials 把 sql.Rows 转成 []*Credential
 func (s *PGStore) scanCredentials(rows *sql.Rows) ([]*Credential, error) {
 	var result []*Credential
 	for rows.Next() {
@@ -196,9 +180,33 @@ func (s *PGStore) scanCredentials(rows *sql.Rows) ([]*Credential, error) {
 			return nil, err
 		}
 		if scopeStr != "" {
-			c.Scope = strings.Split(scopeStr, ",")
+			c.Scope = splitVRefs(scopeStr)
 		}
 		result = append(result, c)
 	}
 	return result, rows.Err()
+}
+
+func joinVRefs(refs []vuri.VRef) string {
+	if len(refs) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		parts = append(parts, string(ref))
+	}
+	return strings.Join(parts, ",")
+}
+
+func splitVRefs(value string) []vuri.VRef {
+	parts := strings.Split(value, ",")
+	refs := make([]vuri.VRef, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		refs = append(refs, vuri.VRef(part))
+	}
+	return refs
 }

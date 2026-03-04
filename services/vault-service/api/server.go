@@ -19,6 +19,7 @@ import (
 	resolverpkg "coordos/resolver"
 	"coordos/vault-service/app"
 	"coordos/vault-service/infra/store"
+	"coordos/vuri"
 )
 
 // Server is the HTTP entrypoint of vault-service.
@@ -535,7 +536,8 @@ func (s *Server) handleUTXOIngest(w http.ResponseWriter, r *http.Request) {
 
 	req.UTXORef = strings.TrimSpace(req.UTXORef)
 	if req.UTXORef == "" {
-		req.UTXORef = fmt.Sprintf("v://%s/utxo/%d", actor.TenantID, time.Now().UnixNano())
+		ns := namespaceFromProjectRef(req.ProjectRef, actor.TenantID)
+		req.UTXORef = fmt.Sprintf("v://%s/utxo/%d", ns, time.Now().UnixNano())
 	}
 	req.Kind = strings.TrimSpace(req.Kind)
 	if req.Kind == "" {
@@ -668,9 +670,9 @@ func (s *Server) verifyExecutorDirect(ctx context.Context, tenantID string, req 
 		return "", fmt.Errorf("direct resolver is not initialized")
 	}
 	in := resolverpkg.VerifyInput{
-		ExecutorRef: strings.TrimSpace(req.ExecutorRef),
-		ProjectRef:  strings.TrimSpace(req.ProjectRef),
-		SPURef:      strings.TrimSpace(req.SPURef),
+		ExecutorRef: vuri.VRef(strings.TrimSpace(req.ExecutorRef)),
+		ProjectRef:  vuri.VRef(strings.TrimSpace(req.ProjectRef)),
+		SPURef:      vuri.VRef(strings.TrimSpace(req.SPURef)),
 		Action:      inferResolverAction(req.SPURef),
 		ValidOn:     time.Now().UTC(),
 		TenantID:    parseIntOrDefault(tenantID, 10000),
@@ -707,10 +709,10 @@ func (s *Server) initDirectResolver() error {
 	tenantID := parseIntOrDefault(os.Getenv("VAULT_SERVICE_TENANT_ID"), 10000)
 	headOfficeRef := strings.TrimSpace(os.Getenv("VAULT_SERVICE_HEAD_OFFICE_REF"))
 	if headOfficeRef == "" {
-		headOfficeRef = "v://zhongbei/executor/headquarters"
+		headOfficeRef = "v://cn.zhongbei/executor/headquarters"
 	}
 	s.resolverDB = db
-	s.resolverSvc = resolverpkg.NewService(resolverpkg.NewPGStore(db), tenantID, headOfficeRef)
+	s.resolverSvc = resolverpkg.NewService(resolverpkg.NewPGStore(db), tenantID, vuri.VRef(headOfficeRef))
 	return nil
 }
 
@@ -1262,6 +1264,29 @@ func normalizeInputRefs(input []string) []string {
 		out = append(out, ref)
 	}
 	return out
+}
+
+func namespaceFromProjectRef(projectRef, tenantID string) string {
+	ref := strings.TrimSpace(strings.ToLower(projectRef))
+	switch {
+	case strings.HasPrefix(ref, "v://cn.zhongbei/"):
+		return "cn.zhongbei"
+	case strings.HasPrefix(ref, "v://zhongbei/"), strings.HasPrefix(ref, "v://10000/"):
+		return "cn.zhongbei"
+	case strings.HasPrefix(ref, "v://"):
+		without := strings.TrimPrefix(ref, "v://")
+		if idx := strings.IndexByte(without, '/'); idx > 0 {
+			ns := strings.TrimSpace(without[:idx])
+			if ns != "" {
+				return ns
+			}
+		}
+	}
+	tenant := strings.TrimSpace(tenantID)
+	if tenant == "" || tenant == "10000" {
+		return "cn.zhongbei"
+	}
+	return tenant
 }
 
 func normalizeIngestUTXOStatus(raw string) (string, error) {

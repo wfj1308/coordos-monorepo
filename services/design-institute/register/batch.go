@@ -210,7 +210,7 @@ func ExcelTemplate() map[string]any {
 					"reg_capital（注册资本，万元）", "established_at（成立日期 YYYY-MM-DD，可选）",
 				},
 				"example": []string{
-					"中北工程设计咨询有限公司", "zhongbei",
+					"中北工程设计咨询有限公司", "cn.zhongbei",
 					"91610000661186666D", "石玉山", "任祥", "陕西省西安市", "5000", "2005-03-15",
 				},
 			},
@@ -257,7 +257,7 @@ func ExcelTemplate() map[string]any {
 func SampleBatchJSON() *BatchInput {
 	return &BatchInput{
 		Org: BatchOrg{
-			Name: "中北工程设计咨询有限公司", ShortCode: "zhongbei",
+			Name: "中北工程设计咨询有限公司", ShortCode: "cn.zhongbei",
 			CreditCode: "91610000661186666D", LegalRep: "石玉山",
 			TechDirector: "任祥", Address: "陕西省西安市", RegCapital: 5000,
 		},

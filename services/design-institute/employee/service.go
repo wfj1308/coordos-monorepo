@@ -87,7 +87,7 @@ func (s *Service) Create(ctx context.Context, in CreateEmployeeInput) (*Employee
 	}
 	if ref == "" {
 		// Backward-compatible fallback for existing callers.
-		ref = fmt.Sprintf("v://zhongbei/executor/person/%d", time.Now().UnixNano())
+		ref = fmt.Sprintf("v://cn.zhongbei/executor/person/%d", time.Now().UnixNano())
 	}
 	e := &Employee{
 		Name:          in.Name,

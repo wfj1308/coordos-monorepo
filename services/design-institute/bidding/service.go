@@ -76,7 +76,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*BidProfile, erro
 		return nil, fmt.Errorf("project_ref is required")
 	}
 	if spuRef == "" {
-		spuRef = "v://zhongbei/spu/bidding/bid_profile@v1"
+		spuRef = "v://cn.zhongbei/spu/bidding/bid_profile@v1"
 	}
 	profileIDs := in.ProfileIDs
 	if len(profileIDs) == 0 {
@@ -92,8 +92,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*BidProfile, erro
 	}
 
 	now := time.Now().UTC()
+	namespace := namespaceFromProjectRef(projectRef)
 	item := &BidProfile{
-		Ref:            fmt.Sprintf("v://%d/bidding/profile/%d", s.tenantID, now.UnixNano()),
+		Ref:            fmt.Sprintf("v://%s/bidding/profile/%d", namespace, now.UnixNano()),
 		Name:           name,
 		ProjectRef:     projectRef,
 		SPURef:         spuRef,
@@ -109,6 +110,25 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*BidProfile, erro
 		return nil, err
 	}
 	return item, nil
+}
+
+func namespaceFromProjectRef(projectRef string) string {
+	ref := strings.TrimSpace(strings.ToLower(projectRef))
+	switch {
+	case strings.HasPrefix(ref, "v://cn.zhongbei/"):
+		return "cn.zhongbei"
+	case strings.HasPrefix(ref, "v://zhongbei/"), strings.HasPrefix(ref, "v://10000/"):
+		return "cn.zhongbei"
+	case strings.HasPrefix(ref, "v://"):
+		without := strings.TrimPrefix(ref, "v://")
+		if idx := strings.IndexByte(without, '/'); idx > 0 {
+			ns := strings.TrimSpace(without[:idx])
+			if ns != "" {
+				return ns
+			}
+		}
+	}
+	return "cn.zhongbei"
 }
 
 func (s *Service) Get(ctx context.Context, id int64) (*BidProfile, error) {

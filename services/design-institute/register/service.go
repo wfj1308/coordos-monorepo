@@ -245,9 +245,9 @@ var executorRoleDefs = []executorRoleDef{
 		DefaultSpecialty:     "Tax filing",
 		DefaultMaxConcurrent: 8,
 		DefaultSPURefs: []string{
-			"v://zhongbei/spu/finance/invoice@v1",
-			"v://zhongbei/spu/finance/collection@v1",
-			"v://zhongbei/spu/finance/tax_return@v1",
+			"v://cn.zhongbei/spu/finance/invoice@v1",
+			"v://cn.zhongbei/spu/finance/collection@v1",
+			"v://cn.zhongbei/spu/finance/tax_return@v1",
 		},
 		Aliases: []string{"TAX_FILER", "TAX"},
 	},
@@ -257,8 +257,8 @@ var executorRoleDefs = []executorRoleDef{
 		DefaultSpecialty:     "Accounting",
 		DefaultMaxConcurrent: 6,
 		DefaultSPURefs: []string{
-			"v://zhongbei/spu/finance/invoice@v1",
-			"v://zhongbei/spu/finance/collection@v1",
+			"v://cn.zhongbei/spu/finance/invoice@v1",
+			"v://cn.zhongbei/spu/finance/collection@v1",
 		},
 		Aliases: []string{"ACCOUNTANT"},
 	},
@@ -268,7 +268,7 @@ var executorRoleDefs = []executorRoleDef{
 		DefaultSpecialty:     "Cash operations",
 		DefaultMaxConcurrent: 6,
 		DefaultSPURefs: []string{
-			"v://zhongbei/spu/finance/collection@v1",
+			"v://cn.zhongbei/spu/finance/collection@v1",
 		},
 		Aliases: []string{"CASHIER"},
 	},
@@ -278,9 +278,9 @@ var executorRoleDefs = []executorRoleDef{
 		DefaultSpecialty:     "Contract ledger",
 		DefaultMaxConcurrent: 8,
 		DefaultSPURefs: []string{
-			"v://zhongbei/spu/contract/review@v1",
-			"v://zhongbei/spu/contract/sign@v1",
-			"v://zhongbei/spu/contract/archive@v1",
+			"v://cn.zhongbei/spu/contract/review@v1",
+			"v://cn.zhongbei/spu/contract/sign@v1",
+			"v://cn.zhongbei/spu/contract/archive@v1",
 		},
 		Aliases: []string{"CONTRACT_ADMIN"},
 	},
@@ -332,9 +332,9 @@ var executorRoleDefs = []executorRoleDef{
 		DefaultSpecialty:     "Client development",
 		DefaultMaxConcurrent: 6,
 		DefaultSPURefs: []string{
-			"v://zhongbei/spu/bid/preparation@v1",
-			"v://zhongbei/spu/bid/submission@v1",
-			"v://zhongbei/spu/bid/award@v1",
+			"v://cn.zhongbei/spu/bid/preparation@v1",
+			"v://cn.zhongbei/spu/bid/submission@v1",
+			"v://cn.zhongbei/spu/bid/award@v1",
 		},
 		Aliases: []string{"MARKET_MANAGER"},
 	},
@@ -344,8 +344,8 @@ var executorRoleDefs = []executorRoleDef{
 		DefaultSpecialty:     "Bid package",
 		DefaultMaxConcurrent: 8,
 		DefaultSPURefs: []string{
-			"v://zhongbei/spu/bid/preparation@v1",
-			"v://zhongbei/spu/bid/submission@v1",
+			"v://cn.zhongbei/spu/bid/preparation@v1",
+			"v://cn.zhongbei/spu/bid/submission@v1",
 		},
 		Aliases: []string{"BID_SPECIALIST"},
 	},
@@ -1148,7 +1148,7 @@ func (s *Service) ExtractCert(ctx context.Context, in ExtractCertInput) (*Extrac
 		return fallback, nil
 	}
 
-prompt := `请从资质证书文件中提取结构化信息，并严格返回 JSON，不要返回任何额外文本。JSON 字段：{
+	prompt := `请从资质证书文件中提取结构化信息，并严格返回 JSON，不要返回任何额外文本。JSON 字段：{
   "company_name":"",
   "credit_code":"",
   "cert_no":"",
