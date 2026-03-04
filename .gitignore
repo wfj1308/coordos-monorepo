@@ -33,6 +33,10 @@ __pycache__/
 
 # Local runtime temp
 /tmp_logs/
+/runtime-logs/
+/backups/
+/tmp_partner_profile_resp.json
+/scripts/regulations_jdy_export_*.csv
 
 # Local binaries/temp artifacts
 *.exe

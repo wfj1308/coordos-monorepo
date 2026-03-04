@@ -350,6 +350,10 @@ CREATE TABLE IF NOT EXISTS approve_flows (
     applicant   VARCHAR(255),
     state       VARCHAR(50) NOT NULL DEFAULT 'PENDING',
     flow_id     BIGINT,
+    legacy_catalog INT,
+    legacy_hierarchy INT,
+    legacy_oid  BIGINT,
+    legacy_user_id BIGINT,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     finished_at TIMESTAMPTZ
@@ -357,8 +361,13 @@ CREATE TABLE IF NOT EXISTS approve_flows (
 
 CREATE TABLE IF NOT EXISTS approve_tasks (
     id           BIGSERIAL PRIMARY KEY,
+    legacy_id    BIGINT,
     flow_id      BIGINT NOT NULL REFERENCES approve_flows(id),
     seq          INT NOT NULL,
+    legacy_catalog INT,
+    legacy_oid   BIGINT,
+    legacy_style INT,
+    legacy_user_id BIGINT,
     approver_ref VARCHAR(255) NOT NULL,
     state        VARCHAR(50) NOT NULL DEFAULT 'WAITING',
     comment      TEXT,
@@ -368,13 +377,35 @@ CREATE TABLE IF NOT EXISTS approve_tasks (
 
 CREATE TABLE IF NOT EXISTS approve_records (
     id         BIGSERIAL PRIMARY KEY,
+    legacy_id  BIGINT,
     flow_id    BIGINT NOT NULL REFERENCES approve_flows(id),
     task_id    BIGINT NOT NULL REFERENCES approve_tasks(id),
+    legacy_hierarchy INT,
+    legacy_state INT,
+    legacy_user_id BIGINT,
     action     VARCHAR(50) NOT NULL,
     actor      VARCHAR(255) NOT NULL,
     comment    TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS approve_flow_approvals (
+    id             BIGSERIAL PRIMARY KEY,
+    legacy_id      BIGINT UNIQUE,
+    tenant_id      INT NOT NULL DEFAULT 10000,
+    flow_id        BIGINT REFERENCES approve_flows(id) ON DELETE CASCADE,
+    task_id        BIGINT REFERENCES approve_tasks(id) ON DELETE SET NULL,
+    legacy_flow_id BIGINT,
+    hierarchy      INT,
+    legacy_user_id BIGINT,
+    actor_ref      VARCHAR(255),
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw            JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_approve_flow_approvals_flow
+ON approve_flow_approvals(flow_id, hierarchy);
 
 -- Cost ticket service
 CREATE TABLE IF NOT EXISTS costtickets (
@@ -400,6 +431,10 @@ CREATE TABLE IF NOT EXISTS costtickets (
     employee_id         BIGINT REFERENCES employees(id),
     bank_id             BIGINT,
     pay_employee_id     BIGINT,
+    flow_id             BIGINT,
+    invoice_id          BIGINT,
+    record_id           BIGINT,
+    tax_expenses_sum    DECIMAL(19,2),
     contract_id         BIGINT REFERENCES contracts(id),
     project_ref         VARCHAR(500),
     note                TEXT,
@@ -417,6 +452,9 @@ CREATE TABLE IF NOT EXISTS payments (
     contract_id  BIGINT NOT NULL REFERENCES contracts(id),
     contract_ref VARCHAR(255),
     project_ref  VARCHAR(500),
+    legacy_balance_id BIGINT,
+    serial_number VARCHAR(255),
+    source_table VARCHAR(64) NOT NULL DEFAULT 'balance_payment',
     bank_id      BIGINT,
     employee_id  BIGINT REFERENCES employees(id),
     state        VARCHAR(50) NOT NULL DEFAULT 'PENDING',
@@ -424,6 +462,493 @@ CREATE TABLE IF NOT EXISTS payments (
     tenant_id    INT NOT NULL DEFAULT 10000,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS costticket_items (
+    id                    BIGSERIAL PRIMARY KEY,
+    legacy_id             BIGINT UNIQUE,
+    tenant_id             INT NOT NULL DEFAULT 10000,
+    costticket_id         BIGINT NOT NULL REFERENCES costtickets(id) ON DELETE CASCADE,
+    amount                DECIMAL(19,2),
+    balance_type          INT,
+    bank_name             VARCHAR(255),
+    bank_no               VARCHAR(255),
+    invoice_amount        DECIMAL(19,2),
+    invoice_type          INT,
+    management_amount     DECIMAL(19,2),
+    management_rate       DECIMAL(10,4),
+    money                 DECIMAL(19,2),
+    rate                  INT,
+    settlement_type       INT,
+    tax_expenses          DECIMAL(10,4),
+    ticket_date           TIMESTAMPTZ,
+    ticket_number         VARCHAR(255),
+    unit                  VARCHAR(255),
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw                   JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE TABLE IF NOT EXISTS payment_items (
+    id                    BIGSERIAL PRIMARY KEY,
+    legacy_id             BIGINT UNIQUE,
+    tenant_id             INT NOT NULL DEFAULT 10000,
+    payment_id            BIGINT NOT NULL REFERENCES payments(id) ON DELETE CASCADE,
+    balance_invoice_legacy_id BIGINT,
+    deduction_amount      DECIMAL(19,2),
+    payment_amount        DECIMAL(19,2),
+    remark                TEXT,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw                   JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE TABLE IF NOT EXISTS payment_attachments (
+    id                    BIGSERIAL PRIMARY KEY,
+    legacy_id             BIGINT UNIQUE,
+    tenant_id             INT NOT NULL DEFAULT 10000,
+    payment_id            BIGINT NOT NULL REFERENCES payments(id) ON DELETE CASCADE,
+    filename              VARCHAR(255),
+    url                   TEXT,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw                   JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE TABLE IF NOT EXISTS balance_invoices (
+    id                    BIGSERIAL PRIMARY KEY,
+    legacy_id             BIGINT UNIQUE,
+    tenant_id             INT NOT NULL DEFAULT 10000,
+    balance_id            BIGINT REFERENCES balances(id) ON DELETE SET NULL,
+    balance_legacy_id     BIGINT,
+    contract_id           BIGINT REFERENCES contracts(id) ON DELETE SET NULL,
+    amount                DECIMAL(19,2),
+    money                 DECIMAL(19,2),
+    invoice               DECIMAL(19,2),
+    management            DECIMAL(19,2),
+    file_bond_money       DECIMAL(19,2),
+    fast_money            DECIMAL(19,2),
+    management_rate       DECIMAL(10,4),
+    rate                  INT,
+    tax_expenses          DECIMAL(10,4),
+    bank_name             VARCHAR(255),
+    bank_no               VARCHAR(255),
+    unit                  VARCHAR(255),
+    balance_type          INT,
+    invoice_type          INT,
+    settlement_type       INT,
+    fast_type             INT,
+    file_num              VARCHAR(255),
+    bond_type_check       INT,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw                   JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_balance_invoices_balance
+ON balance_invoices(balance_id);
+
+CREATE TABLE IF NOT EXISTS gathering_items (
+    id                    BIGSERIAL PRIMARY KEY,
+    legacy_id             BIGINT UNIQUE,
+    tenant_id             INT NOT NULL DEFAULT 10000,
+    gathering_id          BIGINT REFERENCES gatherings(id) ON DELETE SET NULL,
+    gathering_legacy_id   BIGINT,
+    contract_id           BIGINT REFERENCES contracts(id) ON DELETE SET NULL,
+    contract_legacy_id    BIGINT,
+    invoice_id            BIGINT REFERENCES invoices(id) ON DELETE SET NULL,
+    invoice_legacy_id     BIGINT,
+    relation_state        INT,
+    money                 DECIMAL(19,2),
+    invoice_money         DECIMAL(19,2),
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw                   JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_gathering_items_gathering
+ON gathering_items(gathering_id);
+
+CREATE TABLE IF NOT EXISTS customers (
+    id                    BIGSERIAL PRIMARY KEY,
+    legacy_id             BIGINT UNIQUE,
+    tenant_id             INT NOT NULL DEFAULT 10000,
+    company_id            BIGINT REFERENCES companies(id) ON DELETE SET NULL,
+    name                  VARCHAR(500) NOT NULL,
+    state                 VARCHAR(50),
+    address               TEXT,
+    telephone             VARCHAR(100),
+    phone                 VARCHAR(100),
+    mail                  VARCHAR(255),
+    charger_name          VARCHAR(255),
+    charger_phone         VARCHAR(100),
+    charger_position      VARCHAR(100),
+    bank_name             VARCHAR(255),
+    bank_no               VARCHAR(255),
+    bank_account          VARCHAR(255),
+    deposit_bank          VARCHAR(255),
+    taxpayer_no           VARCHAR(255),
+    card_number           VARCHAR(255),
+    job                   VARCHAR(255),
+    principal             VARCHAR(255),
+    extra                 TEXT,
+    deleted               BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw                   JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_customers_company
+ON customers(company_id);
+
+CREATE TABLE IF NOT EXISTS balance_records (
+    id                    BIGSERIAL PRIMARY KEY,
+    legacy_id             BIGINT UNIQUE,
+    tenant_id             INT NOT NULL DEFAULT 10000,
+    balance_id            BIGINT REFERENCES balances(id) ON DELETE SET NULL,
+    balance_legacy_id     BIGINT,
+    money                 DECIMAL(19,2),
+    before_money          DECIMAL(19,2),
+    after_money           DECIMAL(19,2),
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw                   JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_balance_records_balance
+ON balance_records(balance_id);
+
+CREATE TABLE IF NOT EXISTS gathering_records (
+    id                    BIGSERIAL PRIMARY KEY,
+    legacy_id             BIGINT UNIQUE,
+    tenant_id             INT NOT NULL DEFAULT 10000,
+    gathering_id          BIGINT REFERENCES gatherings(id) ON DELETE SET NULL,
+    gathering_legacy_id   BIGINT,
+    money                 DECIMAL(19,2),
+    before_money          DECIMAL(19,2),
+    after_money           DECIMAL(19,2),
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw                   JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_gathering_records_gathering
+ON gathering_records(gathering_id);
+
+CREATE TABLE IF NOT EXISTS invoice_records (
+    id                    BIGSERIAL PRIMARY KEY,
+    legacy_id             BIGINT UNIQUE,
+    tenant_id             INT NOT NULL DEFAULT 10000,
+    invoice_id            BIGINT REFERENCES invoices(id) ON DELETE SET NULL,
+    invoice_legacy_id     BIGINT,
+    money                 DECIMAL(19,2),
+    before_money          DECIMAL(19,2),
+    after_money           DECIMAL(19,2),
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw                   JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_invoice_records_invoice
+ON invoice_records(invoice_id);
+
+CREATE TABLE IF NOT EXISTS contract_creations (
+    id                    BIGSERIAL PRIMARY KEY,
+    legacy_id             BIGINT UNIQUE,
+    tenant_id             INT NOT NULL DEFAULT 10000,
+    company_id            BIGINT REFERENCES companies(id) ON DELETE SET NULL,
+    employee_id           BIGINT REFERENCES employees(id) ON DELETE SET NULL,
+    legacy_parent_id      BIGINT,
+    parent_id             BIGINT REFERENCES contract_creations(id) ON DELETE SET NULL,
+    name                  TEXT,
+    contract_number       VARCHAR(255),
+    contract_type         INT,
+    signing_type          INT,
+    zb_wt                 VARCHAR(100),
+    state                 VARCHAR(100),
+    store_state           INT,
+    leader                VARCHAR(255),
+    leader_phone          VARCHAR(100),
+    contacts              VARCHAR(255),
+    contacts_phone        VARCHAR(100),
+    size                  TEXT,
+    note                  TEXT,
+    contract_money        DECIMAL(19,2),
+    investment_money      DECIMAL(19,2),
+    sign_date             TEXT,
+    confirm_date          TEXT,
+    flow_id               BIGINT,
+    owner_legacy_id       BIGINT,
+    user_legacy_id        BIGINT,
+    draft                 BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw                   JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE TABLE IF NOT EXISTS contract_creation_attachments (
+    id                    BIGSERIAL PRIMARY KEY,
+    legacy_id             BIGINT UNIQUE,
+    tenant_id             INT NOT NULL DEFAULT 10000,
+    contract_creation_id  BIGINT REFERENCES contract_creations(id) ON DELETE CASCADE,
+    contract_creation_legacy_id BIGINT,
+    filename              VARCHAR(500),
+    url                   TEXT,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw                   JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_contract_creation_attachments_creation
+ON contract_creation_attachments(contract_creation_id);
+
+CREATE TABLE IF NOT EXISTS contract_extras (
+    id                    BIGSERIAL PRIMARY KEY,
+    legacy_id             BIGINT UNIQUE,
+    tenant_id             INT NOT NULL DEFAULT 10000,
+    contract_id           BIGINT REFERENCES contracts(id) ON DELETE SET NULL,
+    contract_creation_id  BIGINT REFERENCES contract_creations(id) ON DELETE SET NULL,
+    contract_creation_legacy_id BIGINT,
+    state                 VARCHAR(100),
+    payment_type          VARCHAR(100),
+    binding_style         VARCHAR(100),
+    sender                VARCHAR(255),
+    receiver              VARCHAR(255),
+    submitter             VARCHAR(255),
+    stamper               VARCHAR(255),
+    printer               VARCHAR(255),
+    contact               VARCHAR(255),
+    mailing_address       TEXT,
+    express_number        VARCHAR(255),
+    express_file          TEXT,
+    express_date          TEXT,
+    stamp_date            TEXT,
+    application_time      TEXT,
+    received_date         TEXT,
+    stamp_require         TEXT,
+    note                  TEXT,
+    publish_num           INT,
+    sealed                TEXT,
+    mailed                TEXT,
+    received              TEXT,
+    plan_receiver         TEXT,
+    real_receiver         TEXT,
+    legacy_user_id        BIGINT,
+    sender_user_id        BIGINT,
+    receiver_user_id      BIGINT,
+    submitter_id          BIGINT,
+    stamper_user_id       BIGINT,
+    receiver_id           BIGINT,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw                   JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_contract_extras_contract
+ON contract_extras(contract_id);
+
+CREATE TABLE IF NOT EXISTS contract_extra_attachments (
+    id                    BIGSERIAL PRIMARY KEY,
+    legacy_id             BIGINT UNIQUE,
+    tenant_id             INT NOT NULL DEFAULT 10000,
+    contract_extra_id     BIGINT REFERENCES contract_extras(id) ON DELETE CASCADE,
+    contract_extra_legacy_id BIGINT,
+    filename              VARCHAR(500),
+    url                   TEXT,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw                   JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_contract_extra_attachments_extra
+ON contract_extra_attachments(contract_extra_id);
+
+CREATE TABLE IF NOT EXISTS bid_assures (
+    id                    BIGSERIAL PRIMARY KEY,
+    legacy_id             BIGINT UNIQUE,
+    tenant_id             INT NOT NULL DEFAULT 10000,
+    company_id            BIGINT REFERENCES companies(id) ON DELETE SET NULL,
+    employee_id           BIGINT REFERENCES employees(id) ON DELETE SET NULL,
+    approve_task_id       BIGINT REFERENCES approve_tasks(id) ON DELETE SET NULL,
+    legacy_user_id        BIGINT,
+    assure_number         VARCHAR(255),
+    project               TEXT,
+    purpose               TEXT,
+    state                 VARCHAR(100),
+    state_back            VARCHAR(100),
+    state_return          VARCHAR(100),
+    pay_type              INT,
+    assure_type           INT,
+    partner_type          INT,
+    payee                 VARCHAR(255),
+    payer                 VARCHAR(255),
+    assure_payee          VARCHAR(255),
+    partner               VARCHAR(255),
+    other                 VARCHAR(255),
+    other_phone           VARCHAR(100),
+    piao_hao              VARCHAR(255),
+    assure_fund           DECIMAL(19,2),
+    import_money          DECIMAL(19,2),
+    money_back            DECIMAL(19,2),
+    return_money          DECIMAL(19,2),
+    assure_fund_chinese   VARCHAR(255),
+    pay_date              TEXT,
+    import_date           TEXT,
+    money_back_date       TEXT,
+    return_pay_date       TEXT,
+    time_end              TEXT,
+    bank_name             VARCHAR(255),
+    bank_account          VARCHAR(255),
+    assure_bank_name      VARCHAR(255),
+    assure_bank_account   VARCHAR(255),
+    return_bank_name      VARCHAR(255),
+    return_bank_account   VARCHAR(255),
+    return_payee          VARCHAR(255),
+    return_payer          VARCHAR(255),
+    return_zhuanyuan      VARCHAR(255),
+    tou_zhuanyuan         VARCHAR(255),
+    pay_voucher           TEXT,
+    return_file           TEXT,
+    bid_file              TEXT,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw                   JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_bid_assures_company
+ON bid_assures(company_id);
+
+CREATE TABLE IF NOT EXISTS bid_assure_flows (
+    id                    BIGSERIAL PRIMARY KEY,
+    legacy_id             BIGINT UNIQUE,
+    tenant_id             INT NOT NULL DEFAULT 10000,
+    bid_assure_id         BIGINT REFERENCES bid_assures(id) ON DELETE CASCADE,
+    bid_assure_legacy_id  BIGINT,
+    company_id            BIGINT REFERENCES companies(id) ON DELETE SET NULL,
+    employee_id           BIGINT REFERENCES employees(id) ON DELETE SET NULL,
+    bankflow_entry_id     BIGINT REFERENCES bankflow_entries(id) ON DELETE SET NULL,
+    legacy_bankflow_id    BIGINT,
+    legacy_user_id        BIGINT,
+    project               TEXT,
+    note                  TEXT,
+    opposite_name         VARCHAR(255),
+    payee                 VARCHAR(255),
+    assure_payee          VARCHAR(255),
+    piao_hao              VARCHAR(255),
+    assure_fund           DECIMAL(19,2),
+    import_money          DECIMAL(19,2),
+    money_back            DECIMAL(19,2),
+    return_money          DECIMAL(19,2),
+    pay_date              TEXT,
+    import_date           TEXT,
+    money_back_date       TEXT,
+    return_pay_date       TEXT,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw                   JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_bid_assure_flows_assure
+ON bid_assure_flows(bid_assure_id);
+
+CREATE TABLE IF NOT EXISTS contract_details (
+    id                    BIGSERIAL PRIMARY KEY,
+    legacy_id             BIGINT UNIQUE,
+    tenant_id             INT NOT NULL DEFAULT 10000,
+    contract_id           BIGINT REFERENCES contracts(id) ON DELETE CASCADE,
+    invoice_id            BIGINT REFERENCES invoices(id),
+    investment            DECIMAL(19,2),
+    money                 DECIMAL(19,2),
+    note                  TEXT,
+    pay_type              INT,
+    program_type          VARCHAR(255),
+    rate                  VARCHAR(255),
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw                   JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE TABLE IF NOT EXISTS contract_attributes (
+    id                    BIGSERIAL PRIMARY KEY,
+    tenant_id             INT NOT NULL DEFAULT 10000,
+    contract_id           BIGINT NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
+    name                  VARCHAR(128) NOT NULL,
+    attr                  TEXT,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw                   JSONB NOT NULL DEFAULT '{}'::jsonb,
+    UNIQUE (tenant_id, contract_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS contract_attachments (
+    id                    BIGSERIAL PRIMARY KEY,
+    legacy_id             BIGINT NOT NULL,
+    source_table          VARCHAR(64) NOT NULL,
+    tenant_id             INT NOT NULL DEFAULT 10000,
+    contract_id           BIGINT REFERENCES contracts(id) ON DELETE CASCADE,
+    related_legacy_id     BIGINT,
+    attachment_type       VARCHAR(255),
+    name                  VARCHAR(500),
+    path                  TEXT,
+    url                   TEXT,
+    note                  TEXT,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw                   JSONB NOT NULL DEFAULT '{}'::jsonb,
+    UNIQUE (source_table, legacy_id)
+);
+
+CREATE TABLE IF NOT EXISTS invoice_items (
+    id                    BIGSERIAL PRIMARY KEY,
+    legacy_id             BIGINT UNIQUE,
+    tenant_id             INT NOT NULL DEFAULT 10000,
+    invoice_id            BIGINT REFERENCES invoices(id) ON DELETE CASCADE,
+    money                 DECIMAL(19,2),
+    program_type          VARCHAR(255),
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw                   JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE TABLE IF NOT EXISTS drawing_attachments (
+    id                    BIGSERIAL PRIMARY KEY,
+    legacy_id             BIGINT NOT NULL,
+    source_table          VARCHAR(64) NOT NULL,
+    tenant_id             INT NOT NULL DEFAULT 10000,
+    drawing_id            BIGINT REFERENCES drawings(id) ON DELETE CASCADE,
+    approve_date          TIMESTAMPTZ,
+    name                  VARCHAR(500),
+    remarks               TEXT,
+    state                 INT,
+    url                   TEXT,
+    version               VARCHAR(255),
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw                   JSONB NOT NULL DEFAULT '{}'::jsonb,
+    UNIQUE (source_table, legacy_id)
+);
+
+CREATE TABLE IF NOT EXISTS bankflow_entries (
+    id                    BIGSERIAL PRIMARY KEY,
+    legacy_id             BIGINT UNIQUE,
+    tenant_id             INT NOT NULL DEFAULT 10000,
+    bank_type_legacy_id   BIGINT,
+    balance_money         DECIMAL(19,2),
+    business_no           VARCHAR(255),
+    card_number           VARCHAR(255),
+    credit_amount         DECIMAL(19,2),
+    currency              VARCHAR(64),
+    debit_amount          DECIMAL(19,2),
+    guanlian_type         INT,
+    note                  TEXT,
+    opposite_account      VARCHAR(255),
+    opposite_name         VARCHAR(255),
+    transaction_time      TIMESTAMPTZ,
+    voucher_number        VARCHAR(255),
+    voucher_type          VARCHAR(255),
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw                   JSONB NOT NULL DEFAULT '{}'::jsonb
 );
 
 -- Dual-write compensation queue
@@ -443,10 +968,25 @@ CREATE INDEX IF NOT EXISTS idx_project_nodes_parent   ON project_nodes(parent_re
 CREATE INDEX IF NOT EXISTS idx_project_nodes_executor ON project_nodes(executor_ref);
 CREATE INDEX IF NOT EXISTS idx_project_nodes_legacy   ON project_nodes(legacy_contract_id);
 CREATE INDEX IF NOT EXISTS idx_approve_flows_biz      ON approve_flows(biz_type, biz_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_approve_flows_legacy_id ON approve_flows(legacy_id);
 CREATE INDEX IF NOT EXISTS idx_approve_tasks_flow     ON approve_tasks(flow_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_approve_tasks_legacy_id
+    ON approve_tasks(legacy_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_approve_records_legacy_id
+    ON approve_records(legacy_id);
 CREATE INDEX IF NOT EXISTS idx_costtickets_contract   ON costtickets(contract_id);
 CREATE INDEX IF NOT EXISTS idx_payments_contract      ON payments(contract_id);
 CREATE INDEX IF NOT EXISTS idx_payments_project       ON payments(project_ref);
+CREATE INDEX IF NOT EXISTS idx_payments_legacy_balance_id ON payments(legacy_balance_id);
+CREATE INDEX IF NOT EXISTS idx_costticket_items_costticket ON costticket_items(costticket_id);
+CREATE INDEX IF NOT EXISTS idx_payment_items_payment ON payment_items(payment_id);
+CREATE INDEX IF NOT EXISTS idx_payment_attachments_payment ON payment_attachments(payment_id);
+CREATE INDEX IF NOT EXISTS idx_contract_details_contract ON contract_details(contract_id);
+CREATE INDEX IF NOT EXISTS idx_contract_details_invoice ON contract_details(invoice_id);
+CREATE INDEX IF NOT EXISTS idx_contract_attachments_contract ON contract_attachments(contract_id);
+CREATE INDEX IF NOT EXISTS idx_invoice_items_invoice ON invoice_items(invoice_id);
+CREATE INDEX IF NOT EXISTS idx_drawing_attachments_drawing ON drawing_attachments(drawing_id);
+CREATE INDEX IF NOT EXISTS idx_bankflow_entries_time ON bankflow_entries(transaction_time DESC);
 
 -- ============================================================
 -- PHASE 1 EXTENSION: resolver + qualification + profile
@@ -531,6 +1071,61 @@ CREATE INDEX IF NOT EXISTS idx_qa_qualification_active
     ON qualification_assignments(tenant_id, qualification_id, status);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_qa_uniq_active_qual
     ON qualification_assignments(qualification_id) WHERE status='ACTIVE';
+
+-- Regulation document registry.
+CREATE TABLE IF NOT EXISTS regulation_documents (
+    id              BIGSERIAL PRIMARY KEY,
+    legacy_id       BIGINT,
+    doc_no          VARCHAR(128),
+    title           VARCHAR(500) NOT NULL,
+    doc_type        VARCHAR(100) NOT NULL DEFAULT 'REGULATION',
+    jurisdiction    VARCHAR(100) NOT NULL DEFAULT 'CN',
+    publisher       VARCHAR(255),
+    status          VARCHAR(20) NOT NULL DEFAULT 'EFFECTIVE'
+                    CHECK (status IN ('DRAFT','EFFECTIVE','SUPERSEDED','REPEALED','ARCHIVED')),
+    category        VARCHAR(100),
+    keywords        TEXT,
+    summary         TEXT,
+    source_url      TEXT,
+    ref             VARCHAR(500),
+    deleted         BOOLEAN NOT NULL DEFAULT FALSE,
+    tenant_id       INT NOT NULL DEFAULT 10000,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_reg_docs_ref_uq
+    ON regulation_documents(ref) WHERE ref IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_reg_docs_doc_no_uq
+    ON regulation_documents(tenant_id, doc_no)
+    WHERE doc_no IS NOT NULL AND doc_no <> '' AND deleted=FALSE;
+CREATE INDEX IF NOT EXISTS idx_reg_docs_status
+    ON regulation_documents(tenant_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_reg_docs_title
+    ON regulation_documents USING gin(to_tsvector('simple', title));
+
+-- Regulation document version timeline.
+CREATE TABLE IF NOT EXISTS regulation_versions (
+    id              BIGSERIAL PRIMARY KEY,
+    document_id     BIGINT NOT NULL REFERENCES regulation_documents(id) ON DELETE CASCADE,
+    version_no      INT NOT NULL DEFAULT 1,
+    effective_from  TIMESTAMPTZ,
+    effective_to    TIMESTAMPTZ,
+    published_at    TIMESTAMPTZ,
+    content_hash    VARCHAR(128),
+    content_text    TEXT,
+    attachment_url  TEXT,
+    source_note     TEXT,
+    tenant_id       INT NOT NULL DEFAULT 10000,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (document_id, version_no)
+);
+
+CREATE INDEX IF NOT EXISTS idx_reg_versions_effective
+    ON regulation_versions(tenant_id, effective_from DESC, effective_to DESC);
+CREATE INDEX IF NOT EXISTS idx_reg_versions_published
+    ON regulation_versions(tenant_id, published_at DESC);
 
 -- Achievement profile root table for bid/qualification materials.
 CREATE TABLE IF NOT EXISTS achievement_profiles (
@@ -864,6 +1459,31 @@ LEFT JOIN executor_stats es ON es.executor_ref = a.executor_ref AND es.tenant_id
 LEFT JOIN employees emp ON emp.executor_ref = a.executor_ref
 ORDER BY a.settled_at DESC NULLS LAST;
 
+-- 执行体证书仓库视图：以 executor_ref 为主键视角的资质聚合底座
+CREATE OR REPLACE VIEW credential_vault AS
+SELECT
+    q.tenant_id,
+    COALESCE(q.executor_ref, '') AS executor_ref,
+    q.id AS qualification_id,
+    q.qual_type,
+    COALESCE(q.holder_name, '') AS holder_name,
+    COALESCE(q.cert_no, '') AS cert_no,
+    q.status AS qualification_status,
+    q.valid_until,
+    q.updated_at,
+    COALESCE(qa.assignment_count, 0) AS assignment_count,
+    qa.last_assignment_at
+FROM qualifications q
+LEFT JOIN LATERAL (
+    SELECT
+        COUNT(*)::INT AS assignment_count,
+        MAX(created_at) AS last_assignment_at
+    FROM qualification_assignments a
+    WHERE a.tenant_id = q.tenant_id
+      AND a.qualification_id = q.id
+) qa ON TRUE
+WHERE COALESCE(q.deleted, FALSE) = FALSE;
+
 -- 资质消耗追踪：查某资质被哪些项目消耗
 CREATE OR REPLACE VIEW credential_consumption AS
 SELECT 
@@ -915,4 +1535,196 @@ LEFT JOIN resource_bindings rb ON rb.achievement_utxo_id = a.id
 LEFT JOIN qualifications q ON q.id = rb.credential_id
 LEFT JOIN employees emp ON emp.executor_ref = a.executor_ref
 GROUP BY a.executor_ref, emp.name, a.tenant_id;
+
+-- Ref alias mapping for legacy -> canonical namespace compatibility.
+CREATE TABLE IF NOT EXISTS ref_aliases (
+    id             BIGSERIAL PRIMARY KEY,
+    tenant_id      INT NOT NULL DEFAULT 10000,
+    alias_ref      VARCHAR(500) NOT NULL,
+    canonical_ref  VARCHAR(500) NOT NULL,
+    ref_type       VARCHAR(64) NOT NULL DEFAULT 'GENERIC',
+    status         VARCHAR(16) NOT NULL DEFAULT 'ACTIVE'
+                   CHECK (status IN ('ACTIVE','INACTIVE')),
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_ref_aliases_tenant_alias UNIQUE (tenant_id, alias_ref)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ref_aliases_tenant_canonical
+    ON ref_aliases(tenant_id, canonical_ref);
+
+-- ============================================================
+-- PHASE 14 EXTENSION: additional non-log business tables
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS contract_archives (
+    id                 BIGSERIAL PRIMARY KEY,
+    legacy_id          BIGINT UNIQUE,
+    tenant_id          INT NOT NULL DEFAULT 10000,
+    contract_id        BIGINT REFERENCES contracts(id) ON DELETE SET NULL,
+    contract_legacy_id BIGINT,
+    archive_date       TIMESTAMPTZ,
+    archive_note       TEXT,
+    archive_operator   VARCHAR(255),
+    check_date         TIMESTAMPTZ,
+    check_note         TEXT,
+    check_operator     VARCHAR(255),
+    signing_time       TIMESTAMPTZ,
+    create_by          VARCHAR(255),
+    update_by          VARCHAR(255),
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw                JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_contract_archives_contract
+    ON contract_archives(contract_id);
+
+CREATE TABLE IF NOT EXISTS gathering_attachments (
+    id                  BIGSERIAL PRIMARY KEY,
+    legacy_id           BIGINT UNIQUE,
+    tenant_id           INT NOT NULL DEFAULT 10000,
+    gathering_id        BIGINT REFERENCES gatherings(id) ON DELETE SET NULL,
+    gathering_legacy_id BIGINT,
+    filename            VARCHAR(500),
+    url                 TEXT,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw                 JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_gathering_attachments_gathering
+    ON gathering_attachments(gathering_id);
+
+CREATE TABLE IF NOT EXISTS filebonds (
+    id                       BIGSERIAL PRIMARY KEY,
+    legacy_id                BIGINT UNIQUE,
+    tenant_id                INT NOT NULL DEFAULT 10000,
+    company_id               BIGINT REFERENCES companies(id) ON DELETE SET NULL,
+    employee_id              BIGINT REFERENCES employees(id) ON DELETE SET NULL,
+    contract_id              BIGINT REFERENCES contracts(id) ON DELETE SET NULL,
+    balance_invoice_id       BIGINT REFERENCES balance_invoices(id) ON DELETE SET NULL,
+    balance_invoice_legacy_id BIGINT,
+    user_legacy_id           BIGINT,
+    state                    VARCHAR(100),
+    bond_fund                DECIMAL(19,2),
+    bond_type                INT,
+    bond_number              VARCHAR(255),
+    partner_type             INT,
+    return_file              TEXT,
+    return_pay_date          TEXT,
+    created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw                      JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_filebonds_contract
+    ON filebonds(contract_id);
+CREATE INDEX IF NOT EXISTS idx_filebonds_balance_invoice
+    ON filebonds(balance_invoice_id);
+
+CREATE TABLE IF NOT EXISTS project_file_uploads (
+    id                 BIGSERIAL PRIMARY KEY,
+    legacy_id          BIGINT UNIQUE,
+    tenant_id          INT NOT NULL DEFAULT 10000,
+    employee_id        BIGINT REFERENCES employees(id) ON DELETE SET NULL,
+    user_legacy_id     BIGINT,
+    name               TEXT,
+    note               TEXT,
+    leader             VARCHAR(255),
+    sign_date          TIMESTAMPTZ,
+    category_legacy_id BIGINT,
+    industry_legacy_id BIGINT,
+    contract_money     DECIMAL(19,2),
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw                JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE TABLE IF NOT EXISTS project_files (
+    id                          BIGSERIAL PRIMARY KEY,
+    legacy_id                   BIGINT UNIQUE,
+    tenant_id                   INT NOT NULL DEFAULT 10000,
+    project_file_upload_id      BIGINT REFERENCES project_file_uploads(id) ON DELETE SET NULL,
+    project_file_upload_legacy_id BIGINT,
+    filename                    VARCHAR(500),
+    url                         TEXT,
+    state                       VARCHAR(50),
+    project_file_type           VARCHAR(255),
+    created_at                  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at                  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw                         JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_project_files_upload
+    ON project_files(project_file_upload_id);
+
+CREATE TABLE IF NOT EXISTS contract_cancels (
+    id                 BIGSERIAL PRIMARY KEY,
+    legacy_id          BIGINT UNIQUE,
+    tenant_id          INT NOT NULL DEFAULT 10000,
+    contract_id        BIGINT REFERENCES contracts(id) ON DELETE SET NULL,
+    contract_legacy_id BIGINT,
+    cancel_note        TEXT,
+    extra              TEXT,
+    deleted            BOOLEAN NOT NULL DEFAULT FALSE,
+    create_by          VARCHAR(255),
+    update_by          VARCHAR(255),
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw                JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_contract_cancels_contract
+    ON contract_cancels(contract_id);
+
+CREATE TABLE IF NOT EXISTS project_partners (
+    id                BIGSERIAL PRIMARY KEY,
+    legacy_id         BIGINT UNIQUE,
+    tenant_id         INT NOT NULL DEFAULT 10000,
+    company_id        BIGINT REFERENCES companies(id) ON DELETE SET NULL,
+    company_legacy_id BIGINT,
+    name              VARCHAR(255),
+    id_card           VARCHAR(255),
+    id_card_scanning  TEXT,
+    rel_cert_scanning TEXT,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw               JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_project_partners_company
+    ON project_partners(company_id);
+
+CREATE TABLE IF NOT EXISTS company_contracts (
+    id                BIGSERIAL PRIMARY KEY,
+    legacy_id         BIGINT UNIQUE,
+    tenant_id         INT NOT NULL DEFAULT 10000,
+    company_id        BIGINT REFERENCES companies(id) ON DELETE SET NULL,
+    company_legacy_id BIGINT,
+    user_legacy_id    BIGINT,
+    name              VARCHAR(500),
+    filename          VARCHAR(500),
+    url               TEXT,
+    state             VARCHAR(100),
+    start_date        TIMESTAMPTZ,
+    end_date          TIMESTAMPTZ,
+    upload_time       TIMESTAMPTZ,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw               JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_company_contracts_company
+    ON company_contracts(company_id);
+
+-- Generic archive of system/log tables to keep full-table traceability.
+CREATE TABLE IF NOT EXISTS legacy_source_rows (
+    id           BIGSERIAL PRIMARY KEY,
+    batch_id     BIGINT NOT NULL,
+    source_table TEXT NOT NULL,
+    legacy_id    BIGINT,
+    source_pk    JSONB,
+    row_hash     TEXT NOT NULL,
+    tenant_id    INT NOT NULL DEFAULT 10000,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw          JSONB NOT NULL DEFAULT '{}'::jsonb,
+    UNIQUE (batch_id, source_table, row_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_legacy_source_rows_table_legacy
+    ON legacy_source_rows(source_table, legacy_id);
 
