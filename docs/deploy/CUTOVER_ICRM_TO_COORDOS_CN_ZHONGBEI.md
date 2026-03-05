@@ -32,7 +32,7 @@ Define hard checkpoints with rollback assets:
 - `CP0`: Before any DB operation
 - `CP1`: After MySQL dump restore
 - `CP2`: After PostgreSQL schema init
-- `CP3`: After phased migration (`company/employee/contract/finance/drawing/supplement`)
+- `CP3`: After phased migration (`company/employee/contract/finance/achievement/drawing/supplement`)
 - `CP4`: After namespace + registration into `cn.zhongbei`
 - `CP5`: After optional cleanup of test/demo data
 
@@ -132,6 +132,7 @@ python scripts/migrate.py --phase company
 python scripts/migrate.py --phase employee
 python scripts/migrate.py --phase contract
 python scripts/migrate.py --phase finance
+python scripts/migrate.py --phase achievement
 python scripts/migrate.py --phase drawing
 python scripts/migrate.py --phase approve_history
 python scripts/migrate.py --phase cost_payment

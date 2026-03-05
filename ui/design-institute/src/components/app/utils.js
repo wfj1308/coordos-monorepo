@@ -1,4 +1,4 @@
-﻿export function readLocal(key, fallback) {
+export function readLocal(key, fallback) {
   const v = localStorage.getItem(key);
   return v == null ? fallback : v;
 }
@@ -8,7 +8,9 @@ export function saveLocal(key, value) {
 }
 
 export function normalizeNamespaceCode(v) {
-  const raw = String(v || "").trim().replace(/^v:\/\//, "");
+  const raw = String(v || "")
+    .trim()
+    .replace(/^v:\/\//, "");
   if (!raw) return "";
   return raw.split("/")[0].trim();
 }
@@ -110,9 +112,7 @@ export async function apiRequest({ method, url, body, token }) {
   const data = tryParse(text);
   if (!res.ok) {
     const detail =
-      (data && typeof data === "object" && (data.error || data.detail || data.message)) ||
-      text ||
-      "request failed";
+      (data && typeof data === "object" && (data.error || data.detail || data.message)) || text || "request failed";
     throw new Error(`[${method}] ${url} -> ${res.status}: ${detail}`);
   }
   return { status: res.status, data };

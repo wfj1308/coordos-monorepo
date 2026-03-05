@@ -58,3 +58,21 @@ Then run regulation migration with the exported CSV:
 ```bash
 REGULATION_SOURCE_CSV=scripts/regulations_jdy_export.csv python scripts/migrate.py --phase regulation
 ```
+
+Run data quality gate for three libraries:
+```bash
+python scripts/migrate.py --phase quality_gate
+```
+
+Block pipeline on red quality gate (recommended in CI/import jobs):
+```bash
+python scripts/migrate.py --phase regulation --quality-gate-strict
+python scripts/migrate.py --phase verify --quality-gate-strict
+```
+
+## Historical Achievement Backfill
+Build historical `achievement_utxos` from migrated contracts (idempotent):
+
+```bash
+python scripts/migrate.py --phase achievement
+```

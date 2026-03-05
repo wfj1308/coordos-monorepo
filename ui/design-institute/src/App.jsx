@@ -1,333 +1,167 @@
-﻿import { useMemo, useState } from "react";
-import DashboardSection from "./components/app/DashboardSection";
-import EnvironmentTemplatesSection from "./components/app/EnvironmentTemplatesSection";
-import MainFlowSection from "./components/app/MainFlowSection";
-import PartnerProfileSection from "./components/app/PartnerProfileSection";
-import RequestConsoleSection from "./components/app/RequestConsoleSection";
-import { readLocal, saveLocal, trimTrailingSlash, tryParse } from "./components/app/utils";
-import useDashboardData from "./hooks/useDashboardData";
-import useMainFlow from "./hooks/useMainFlow";
-import usePartnerProfile from "./hooks/usePartnerProfile";
+import { BrowserRouter, Link, NavLink, Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
+import DashboardPage from "./DashboardPage";
+import MainFlowPage from "./MainFlowPage";
+import ApiConsolePage from "./ApiConsolePage";
+import PartnerProfilePage from "./PartnerProfilePage";
+import JoinPage from "./JoinPage";
 
-const quickTemplates = [
+const portalModules = [
   {
-    name: "DI Health",
-    method: "GET",
-    url: "{DI}/health",
-    body: "",
+    key: "dashboard",
+    title: "业务数据看板",
+    desc: "项目、合同、人员、资质、业绩与三库映射统一回读。",
+    href: "/dashboard",
+    badge: "核心",
+    icon: "KANBAN",
   },
   {
-    name: "Vault Health",
-    method: "GET",
-    url: "{VAULT}/health",
-    body: "",
+    key: "partner-profile",
+    title: "合作能力画像",
+    desc: "对外展示资质层、能力层、业绩层、当前产能与验真能力。",
+    href: "/partner-profile",
+    badge: "公开接口",
+    icon: "PROFILE",
   },
   {
-    name: "Project Resources",
-    method: "GET",
-    url: "{DI}/api/v1/projects/{ref}/resources",
-    body: "",
+    key: "main-flow",
+    title: "Phase0-7 主流程",
+    desc: "覆盖注册入网到业绩入池的全链路联调与状态追踪。",
+    href: "/main-flow",
+    badge: "流程联调",
+    icon: "FLOW",
   },
   {
-    name: "Partner Profile",
-    method: "GET",
-    url: "{DI}/public/v1/partner-profile/cn.zhongbei",
-    body: "",
+    key: "api-console",
+    title: "API 联调控制台",
+    desc: "统一配置 DI/Vault 调试环境，快速回放模板请求。",
+    href: "/api-console",
+    badge: "开发工具",
+    icon: "API",
   },
   {
-    name: "Verify Achievement Ref",
-    method: "GET",
-    url: "{DI}/api/v1/achievement/verify?ref=v://cn.zhongbei/utxo/achievement/highway/2024/001",
-    body: "",
-  },
-  {
-    name: "Verify Proof Hash",
-    method: "GET",
-    url: "{DI}/public/v1/verify/achievement/sha256:replace_with_hash",
-    body: "",
-  },
-  {
-    name: "Manual Achievement",
-    method: "POST",
-    url: "{DI}/api/v1/achievements/manual",
-    body: JSON.stringify(
-      {
-        spu_ref: "v://cn.zhongbei/spu/bridge/pile_foundation_drawing@v1",
-        project_ref: "v://cn.zhongbei/project/replace-with-real-project",
-        executor_ref: "v://cn.zhongbei/executor/person/replace-with-real-executor@v1",
-        payload: { amount: 500000, stage: "review-finish" },
-      },
-      null,
-      2,
-    ),
+    key: "join",
+    title: "设计院入网注册",
+    desc: "四步完成组织入网、资质注册、执行体导入与激活上线。",
+    href: "/join",
+    badge: "入网",
+    icon: "JOIN",
   },
 ];
 
-export default function App() {
-  const [diBase, setDiBase] = useState(readLocal("coordos.di.base", "/di"));
-  const [vaultBase, setVaultBase] = useState(readLocal("coordos.vault.base", "/vault"));
-  const [token, setToken] = useState(readLocal("coordos.token", ""));
-  const [useAuth, setUseAuth] = useState(readLocal("coordos.use.auth", "0") === "1");
+const quickChecks = ["统一入口与权限边界", "主流程联调闭环可追踪", "三库数据回读与质量检查", "对外能力声明与验真"];
 
-  const [method, setMethod] = useState("GET");
-  const [url, setUrl] = useState("{DI}/health");
-  const [body, setBody] = useState("");
-  const [response, setResponse] = useState("");
-  const [pending, setPending] = useState(false);
+function SystemHome() {
+  return (
+    <section className="di-system-home space-y-4">
+      <header className="panel di-console-shell p-5">
+        <div className="di-console-hero">
+          <div>
+            <p className="di-kicker">CoordOS / Design Institute</p>
+            <h1 className="di-console-title">中北设计院管理系统</h1>
+            <p className="di-console-subtitle">将业务联调、数据看板、入网注册、能力声明和 API 工具纳入同一工作台。</p>
+            <div className="di-console-meta">
+              <span>系统化导航</span>
+              <span>统一视觉语言</span>
+              <span>模块独立可扩展</span>
+            </div>
+          </div>
+          <div className="di-console-actions">
+            <Link to="/dashboard" className="di-btn di-btn-primary">
+              进入业务看板
+            </Link>
+            <Link to="/join" className="di-btn di-btn-muted">
+              打开入网流程
+            </Link>
+          </div>
+        </div>
+      </header>
 
-  const {
-    flowSteps,
-    flowRunning,
-    flowSummary,
-    runMainFlow,
-    resetFlow,
-  } = useMainFlow({ diBase, useAuth, token, onResponse: setResponse });
+      <section className="di-system-kpi-grid">
+        {quickChecks.map((item) => (
+          <article key={item} className="di-system-kpi-card">
+            <p>{item}</p>
+          </article>
+        ))}
+      </section>
 
-  const {
-    dashboard,
-    dashboardLoading,
-    dashboardError,
-    libraryDetail,
-    libraryDetailLoading,
-    libraryDetailError,
-    libraryRelations,
-    libraryRelationsLoading,
-    libraryRelationsError,
-    executorVault,
-    executorVaultLoading,
-    executorVaultError,
-    librarySearch,
-    librarySearchLoading,
-    librarySearchError,
-    selectedProjectRef,
-    projectDetailLoading,
-    tablePages,
-    tablePageSize,
-    setSelectedProjectRef,
-    loadProjectDetail,
-    loadDashboardData,
-    changeTablePage,
-    loadLibraryDetail,
-    loadLibraryRelations,
-    loadExecutorVault,
-    searchLibraries,
-  } = useDashboardData({ diBase, useAuth, token });
-
-  const {
-    partnerProfile,
-    partnerProfileLoading,
-    partnerProfileError,
-    partnerProfileNamespace,
-    loadPartnerProfile,
-    handlePartnerProfileNamespaceChange,
-    verifyInput,
-    verifyLoading,
-    verifyError,
-    verifyResult,
-    handleVerifyInputChange,
-    verifyAchievement,
-    useFirstProofHash,
-  } = usePartnerProfile({ diBase, useAuth, token });
-
-  const finalUrl = useMemo(
-    () =>
-      url
-        .replaceAll("{DI}", trimTrailingSlash(diBase.trim()))
-        .replaceAll("{VAULT}", trimTrailingSlash(vaultBase.trim())),
-    [url, diBase, vaultBase],
+      <section className="di-portal-grid">
+        {portalModules.map((module) => (
+          <Link key={module.key} to={module.href} className="di-portal-card">
+            <div className="di-portal-card-head">
+              <div className="di-portal-badge">{module.badge}</div>
+              <div className="di-portal-icon">{module.icon}</div>
+            </div>
+            <h2 className="di-portal-title">{module.title}</h2>
+            <p className="di-portal-desc">{module.desc}</p>
+            <span className="di-portal-link">打开模块</span>
+          </Link>
+        ))}
+      </section>
+    </section>
   );
+}
 
-  const applyTemplate = (tpl) => {
-    setMethod(tpl.method);
-    setUrl(tpl.url);
-    setBody(tpl.body);
-  };
-
-  const run = async () => {
-    setPending(true);
-    setResponse("");
-    try {
-      const headers = { "Content-Type": "application/json" };
-      if (useAuth && token.trim()) headers.Authorization = `Bearer ${token.trim()}`;
-      const init = { method, headers };
-      if (method !== "GET" && method !== "HEAD") {
-        init.body = body.trim() || "{}";
-      }
-      const resp = await fetch(finalUrl, init);
-      const text = await resp.text();
-      setResponse(
-        JSON.stringify(
-          {
-            status: resp.status,
-            ok: resp.ok,
-            url: finalUrl,
-            method,
-            body: tryParse(text),
-          },
-          null,
-          2,
-        ),
-      );
-    } catch (err) {
-      setResponse(
-        JSON.stringify(
-          {
-            status: 0,
-            ok: false,
-            url: finalUrl,
-            method,
-            error: String(err),
-          },
-          null,
-          2,
-        ),
-      );
-    } finally {
-      setPending(false);
-    }
-  };
-
-  const handleDiBaseChange = (v) => {
-    setDiBase(v);
-    saveLocal("coordos.di.base", v);
-  };
-
-  const handleVaultBaseChange = (v) => {
-    setVaultBase(v);
-    saveLocal("coordos.vault.base", v);
-  };
-
-  const handleUseAuthChange = (checked) => {
-    setUseAuth(checked);
-    saveLocal("coordos.use.auth", checked ? "1" : "0");
-  };
-
-  const handleTokenChange = (v) => {
-    setToken(v);
-    saveLocal("coordos.token", v);
-  };
-
-  const switchProxyMode = () => {
-    setDiBase("/di");
-    setVaultBase("/vault");
-    saveLocal("coordos.di.base", "/di");
-    saveLocal("coordos.vault.base", "/vault");
-  };
-
-  const switchDirectMode = () => {
-    setDiBase("http://127.0.0.1:8090");
-    setVaultBase("http://127.0.0.1:8080");
-    saveLocal("coordos.di.base", "http://127.0.0.1:8090");
-    saveLocal("coordos.vault.base", "http://127.0.0.1:8080");
-  };
-
-  const clearResponse = () => setResponse("");
+function ShellLayout() {
+  const location = useLocation();
+  const activeModule = portalModules.find((item) => location.pathname.startsWith(item.href));
+  const activeTitle = activeModule ? activeModule.title : "系统总览";
 
   return (
-    <main className="min-h-full px-4 py-6 md:px-8">
-      <section className="mx-auto max-w-6xl space-y-6">
-        <header className="panel p-6">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h1 className="text-2xl font-semibold tracking-tight">中北设计院管理系统 · 业务联调台</h1>
-              <p className="mt-2 text-sm text-slate">
-                提供“项目到合同到人员到资质到业绩到发票到结算到证据包”的核心闭环演示。
-              </p>
-            </div>
-            <a
-              href="/join/"
-              target="_blank"
-              rel="noreferrer"
-              className="cursor-pointer rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-800 transition hover:border-skyline hover:text-skyline"
+    <div className="di-app-shell">
+      <aside className="di-side-nav">
+        <div className="di-side-brand">
+          <p className="di-side-kicker">COORDOS</p>
+          <h2>设计院管理系统</h2>
+        </div>
+        <nav aria-label="主导航" className="di-nav-list">
+          <NavLink to="/" end className={({ isActive }) => `di-nav-item ${isActive ? "is-active" : ""}`}>
+            首页总览
+          </NavLink>
+          {portalModules.map((module) => (
+            <NavLink
+              key={module.key}
+              to={module.href}
+              className={({ isActive }) => `di-nav-item ${isActive ? "is-active" : ""}`}
             >
-              打开 v:// 入网工具
-            </a>
+              {module.title}
+            </NavLink>
+          ))}
+        </nav>
+      </aside>
+
+      <section className="di-app-main">
+        <header className="di-app-topbar">
+          <div>
+            <p className="di-app-breadcrumb">系统工作区 / {activeTitle}</p>
+            <h1>{activeTitle}</h1>
+          </div>
+          <div className="di-app-health">
+            <span>环境: {localStorage.getItem("coordos.di.base") || "/di"}</span>
+            <span>状态: ONLINE</span>
           </div>
         </header>
-
-        <PartnerProfileSection
-          namespace={partnerProfileNamespace}
-          onNamespaceChange={handlePartnerProfileNamespaceChange}
-          onRefresh={loadPartnerProfile}
-          loading={partnerProfileLoading}
-          error={partnerProfileError}
-          profile={partnerProfile}
-          verifyInput={verifyInput}
-          verifyLoading={verifyLoading}
-          verifyError={verifyError}
-          verifyResult={verifyResult}
-          onVerifyInputChange={handleVerifyInputChange}
-          onVerify={verifyAchievement}
-          onUseFirstProofHash={useFirstProofHash}
-        />
-
-        <MainFlowSection
-          flowRunning={flowRunning}
-          runMainFlow={runMainFlow}
-          resetFlow={resetFlow}
-          flowSteps={flowSteps}
-          flowSummary={flowSummary}
-        />
-
-        <DashboardSection
-          dashboard={dashboard}
-          dashboardLoading={dashboardLoading}
-          dashboardError={dashboardError}
-          libraryDetail={libraryDetail}
-          libraryDetailLoading={libraryDetailLoading}
-          libraryDetailError={libraryDetailError}
-          libraryRelations={libraryRelations}
-          libraryRelationsLoading={libraryRelationsLoading}
-          libraryRelationsError={libraryRelationsError}
-          executorVault={executorVault}
-          executorVaultLoading={executorVaultLoading}
-          executorVaultError={executorVaultError}
-          librarySearch={librarySearch}
-          librarySearchLoading={librarySearchLoading}
-          librarySearchError={librarySearchError}
-          loadDashboardData={loadDashboardData}
-          loadLibraryDetail={loadLibraryDetail}
-          loadLibraryRelations={loadLibraryRelations}
-          loadExecutorVault={loadExecutorVault}
-          searchLibraries={searchLibraries}
-          selectedProjectRef={selectedProjectRef}
-          setSelectedProjectRef={setSelectedProjectRef}
-          loadProjectDetail={loadProjectDetail}
-          projectDetailLoading={projectDetailLoading}
-          tablePages={tablePages}
-          tablePageSize={tablePageSize}
-          changeTablePage={changeTablePage}
-        />
-
-        <EnvironmentTemplatesSection
-          diBase={diBase}
-          vaultBase={vaultBase}
-          useAuth={useAuth}
-          token={token}
-          onDiBaseChange={handleDiBaseChange}
-          onVaultBaseChange={handleVaultBaseChange}
-          onUseAuthChange={handleUseAuthChange}
-          onTokenChange={handleTokenChange}
-          onSwitchProxyMode={switchProxyMode}
-          onSwitchDirectMode={switchDirectMode}
-          quickTemplates={quickTemplates}
-          applyTemplate={applyTemplate}
-        />
-
-        <RequestConsoleSection
-          method={method}
-          setMethod={setMethod}
-          url={url}
-          setUrl={setUrl}
-          body={body}
-          setBody={setBody}
-          finalUrl={finalUrl}
-          run={run}
-          pending={pending}
-          clearResponse={clearResponse}
-          response={response}
-        />
+        <main className="di-app-content">
+          <Outlet />
+        </main>
       </section>
-    </main>
+    </div>
+  );
+}
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route element={<ShellLayout />}>
+          <Route path="/" element={<SystemHome />} />
+          <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/main-flow" element={<MainFlowPage />} />
+          <Route path="/api-console" element={<ApiConsolePage />} />
+          <Route path="/partner-profile" element={<PartnerProfilePage />} />
+          <Route path="/join/*" element={<JoinPage />} />
+        </Route>
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </BrowserRouter>
   );
 }

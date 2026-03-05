@@ -1,4 +1,5 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import SystemSectionHeader from "./components/app/SystemSectionHeader";
 
 function readLocal(key, fallback) {
   const v = localStorage.getItem(key);
@@ -58,12 +59,20 @@ async function apiRequest(url) {
   } catch {}
   if (!res.ok) {
     const detail =
-      (data && typeof data === "object" && (data.error || data.detail || data.message)) ||
-      text ||
-      "request failed";
-    throw new Error(`[GET] ${url} -> ${res.status}: ${detail}`);
+      (data && typeof data === "object" && (data.error || data.detail || data.message)) || text || "request failed";
+    throw new Error("[GET] " + url + " -> " + res.status + ": " + detail);
   }
   return data;
+}
+
+function isProofHashInput(raw) {
+  const value = String(raw || "").trim();
+  return (
+    /^sha256:[a-fA-F0-9]{64}$/.test(value) ||
+    /^md5:[a-fA-F0-9]{32}$/.test(value) ||
+    /^[a-fA-F0-9]{64}$/.test(value) ||
+    /^[a-fA-F0-9]{32}$/.test(value)
+  );
 }
 
 function renderCell(v) {
@@ -128,7 +137,7 @@ function toCapabilityLevelLabel(v) {
 function toQualTypeLabel(v) {
   const key = String(v || "").trim();
   if (!key) return "-";
-  return QUAL_TYPE_LABEL[key] ? `${QUAL_TYPE_LABEL[key]}（${key}）` : key;
+  return QUAL_TYPE_LABEL[key] ? QUAL_TYPE_LABEL[key] + "（" + key + "）" : key;
 }
 
 function toRuleLabels(v) {
@@ -172,11 +181,14 @@ function SimpleTable({ title, rows, columns, emptyHint }) {
               </tr>
             ) : (
               rows.map((row, idx) => (
-                <tr key={`${title}-${idx}`} className="odd:bg-white even:bg-slate-50">
+                <tr key={String(title) + "-" + idx} className="odd:bg-white even:bg-slate-50">
                   {columns.map((col) => {
                     const val = col.render ? col.render(row) : row[col.key];
                     return (
-                      <td key={`${title}-${idx}-${col.key}`} className="border-b border-slate-100 px-2 py-2 align-top">
+                      <td
+                        key={String(title) + "-" + idx + "-" + col.key}
+                        className="border-b border-slate-100 px-2 py-2 align-top"
+                      >
                         <code className="break-all whitespace-pre-wrap text-[11px] text-slate-700">
                           {renderCell(val)}
                         </code>
@@ -207,7 +219,10 @@ export default function PartnerProfilePage() {
   const [verifyError, setVerifyError] = useState("");
   const [verifyResult, setVerifyResult] = useState(null);
 
-  const endpoint = useMemo(() => `${trimTrailingSlash(diBase.trim())}/public/v1/partner-profile/${namespaceParam}`, [diBase, namespaceParam]);
+  const endpoint = useMemo(
+    () => trimTrailingSlash(diBase.trim()) + "/public/v1/partner-profile/" + namespaceParam,
+    [diBase, namespaceParam],
+  );
 
   const refresh = async () => {
     if (!trimTrailingSlash(diBase.trim())) {
@@ -263,10 +278,10 @@ export default function PartnerProfilePage() {
     setVerifyError("");
     setVerifyResult(null);
     try {
-      const isHash = raw.startsWith("sha256:") || /^[a-fA-F0-9]{64}$/.test(raw);
+      const isHash = isProofHashInput(raw);
       const url = isHash
-        ? `${di}/public/v1/verify/achievement/${encodeURIComponent(raw)}`
-        : `${di}/api/v1/achievement/verify?ref=${encodeURIComponent(raw)}`;
+        ? di + "/public/v1/verify/achievement/" + encodeURIComponent(raw)
+        : di + "/api/v1/achievement/verify?ref=" + encodeURIComponent(raw);
       const data = await apiRequest(url);
       setVerifyResult(data);
     } catch (err) {
@@ -277,35 +292,25 @@ export default function PartnerProfilePage() {
   };
 
   return (
-    <main className="min-h-full px-4 py-6 md:px-8">
-      <section className="mx-auto max-w-6xl space-y-6">
-        <header className="panel p-6">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h1 className="text-2xl font-semibold tracking-tight">{namespaceParam} 合作能力画像</h1>
-              <p className="mt-2 text-sm text-slate">
-                资质、能力、业绩与当前产能四层信息，用于对外协作评估。
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={refresh}
-                disabled={loading}
-                className="rounded-lg bg-skyline px-4 py-2 text-sm font-medium text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {loading ? "刷新中..." : "刷新"}
-              </button>
-              <a
-                href="/"
-                className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm transition hover:border-sky-400 hover:bg-sky-50"
-              >
-                返回
-              </a>
-            </div>
-          </div>
-        </header>
+    <main className="di-page-shell">
+      <section className="di-content-wrap space-y-4">
+        <SystemSectionHeader
+          kicker="CoordOS / Partner Profile"
+          title={namespaceParam + " 合作能力画像"}
+          subtitle="资质、能力、业绩与当前产能四层信息，用于对外协作评估。"
+          actions={[
+            {
+              label: loading ? "刷新中..." : "刷新画像",
+              onClick: refresh,
+              disabled: loading,
+              tone: "di-btn-primary",
+            },
+            { to: "/dashboard", label: "业务看板", tone: "di-btn-muted" },
+            { to: "/join", label: "入网流程", tone: "di-btn-muted" },
+          ]}
+        />
 
-        <section className="panel p-6">
+        <section className="panel di-console-shell p-6">
           <label className="block">
             <span className="mb-1 block text-xs text-slate">Design-Ins 服务地址</span>
             <input
@@ -325,7 +330,7 @@ export default function PartnerProfilePage() {
             <pre className="mt-3 overflow-auto rounded-lg bg-amber-950 p-3 text-xs text-amber-100">{error}</pre>
           ) : null}
           <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
-            <div className="mb-2 text-sm font-medium">UTXO 独立核验</div>
+            <div className="mb-2 text-sm font-medium">UTXO 独立校验</div>
             <div className="grid gap-2 md:grid-cols-[1fr_auto_auto]">
               <input
                 value={verifyInput}
@@ -333,18 +338,15 @@ export default function PartnerProfilePage() {
                 className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                 placeholder="输入 ref / utxo_ref / proof_hash"
               />
-              <button
-                onClick={useFirstProofHash}
-                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm transition hover:border-sky-400 hover:bg-sky-50"
-              >
+              <button onClick={useFirstProofHash} className="di-btn di-btn-muted">
                 使用首个 proof_hash
               </button>
               <button
                 onClick={runVerify}
                 disabled={verifyLoading}
-                className="rounded-lg bg-skyline px-4 py-2 text-sm font-medium text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+                className="di-btn di-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {verifyLoading ? "核验中..." : "执行核验"}
+                {verifyLoading ? "校验中..." : "执行校验"}
               </button>
             </div>
             {verifyError ? (
@@ -365,7 +367,7 @@ export default function PartnerProfilePage() {
               <MetricCard label="目标对象" value={toTargetAudienceLabel(getIn(profile, ["target_audience"], "-"))} />
               <MetricCard label="SPU 类型数" value={toInt(getIn(profile, ["capability_layer", "spu_type_count"], 0))} />
               <MetricCard
-                label="近1年执行次数"
+                label="近一年执行次数"
                 value={toInt(getIn(profile, ["capability_layer", "executions_last_1y"], 0))}
                 hint="含未结算 UTXO"
               />
@@ -412,25 +414,27 @@ export default function PartnerProfilePage() {
                   { key: "credit_code", label: "信用代码" },
                   { key: "scope", label: "业务范围" },
                   { key: "rule_binding", label: "绑定规则", render: (row) => toRuleLabels(row.rule_binding) },
-                  { key: "verify_url", label: "核验地址" },
+                  { key: "verify_url", label: "校验地址" },
                 ]}
               />
               <SimpleTable
-                title="业绩层（近3年已结算）"
+                title="业绩层（近一年已结算）"
                 rows={asArray(getIn(profile, ["achievement_layer", "items"], []))}
                 columns={[
                   { key: "project_ref", label: "项目" },
                   { key: "settled_utxo_count", label: "结算 UTXO 数" },
-                  { key: "latest_settled_at", label: "最近结算时间", render: (row) => formatTime(row.latest_settled_at) },
+                  {
+                    key: "latest_settled_at",
+                    label: "最近结算时间",
+                    render: (row) => formatTime(row.latest_settled_at),
+                  },
                   { key: "proof_hashes", label: "证明哈希" },
                 ]}
                 emptyHint="暂无已结算业绩"
               />
               <SimpleTable
                 title="工程师资质分布"
-                rows={Object.entries(
-                  getIn(profile, ["capability_layer", "qualification_type_counts"], {}) || {},
-                )
+                rows={Object.entries(getIn(profile, ["capability_layer", "qualification_type_counts"], {}) || {})
                   .map(([qualType, count]) => ({ qual_type: qualType, count }))
                   .sort((a, b) => Number(b.count) - Number(a.count))}
                 columns={[

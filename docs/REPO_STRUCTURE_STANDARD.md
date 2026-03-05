@@ -1,4 +1,4 @@
-﻿# Repository Structure Standard
+# Repository Structure Standard
 
 This repository follows a service-first and migration-centralized layout.
 

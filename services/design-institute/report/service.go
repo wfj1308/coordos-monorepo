@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"reflect"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -167,6 +170,9 @@ type ThreeLibrariesQuery struct {
 	StandardOffset      int
 	RegulationLimit     int
 	RegulationOffset    int
+	ExecutorRef         string
+	IncludeHistory      bool
+	ValidOn             *time.Time
 }
 
 type QualificationLibraryItem struct {
@@ -270,6 +276,19 @@ type EngineeringStandardDetail struct {
 	Remarks     string                     `json:"remarks"`
 	CreatedAt   time.Time                  `json:"created_at"`
 	Attachments []*DrawingAttachmentDetail `json:"attachments"`
+	Versions    []*StandardVersionDetail   `json:"versions"`
+}
+
+type StandardVersionDetail struct {
+	ID            int64     `json:"id"`
+	VersionNo     int       `json:"version_no"`
+	Status        string    `json:"status"`
+	ReviewCertRef string    `json:"review_cert_ref"`
+	FileHash      string    `json:"file_hash"`
+	ProofHash     string    `json:"proof_hash"`
+	PublisherRef  string    `json:"publisher_ref"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 type RegulationVersionDetail struct {
@@ -309,21 +328,26 @@ type ExecutorCredentialVault struct {
 	Qualifications     []*VaultQualification           `json:"qualifications"`
 	Assignments        []*QualificationAssignmentBrief `json:"assignments"`
 	Drawings           []*EngineeringStandardItem      `json:"drawings"`
+	Regulations        []*RegulationLibraryItem        `json:"regulations"`
 	QualificationCount int                             `json:"qualification_count"`
 	AssignmentCount    int                             `json:"assignment_count"`
 	DrawingCount       int                             `json:"drawing_count"`
+	RegulationCount    int                             `json:"regulation_count"`
 	UpdatedAt          time.Time                       `json:"updated_at"`
 }
 
 type LibrarySearchQuery struct {
-	Keyword     string
-	Type        string
-	Status      string
-	UpdatedFrom *time.Time
-	UpdatedTo   *time.Time
-	HasExecutor *bool
-	Limit       int
-	Offset      int
+	Keyword        string
+	Type           string
+	Status         string
+	UpdatedFrom    *time.Time
+	UpdatedTo      *time.Time
+	HasExecutor    *bool
+	Limit          int
+	Offset         int
+	ExecutorRef    string
+	IncludeHistory bool
+	ValidOn        *time.Time
 }
 
 type LibrarySearchItem struct {
@@ -346,8 +370,62 @@ type LibrarySearchResult struct {
 	UpdatedAt time.Time            `json:"updated_at"`
 }
 
+type LibraryChangesQuery struct {
+	Limit          int
+	Offset         int
+	From           *time.Time
+	To             *time.Time
+	ExecutorRef    string
+	IncludeHistory bool
+	ValidOn        *time.Time
+}
+
+type LibraryChangeItem struct {
+	Type      string         `json:"type"`
+	ID        int64          `json:"id"`
+	EventType string         `json:"event_type"`
+	Source    string         `json:"source"`
+	Summary   string         `json:"summary"`
+	ChangedAt time.Time      `json:"changed_at"`
+	Payload   map[string]any `json:"payload,omitempty"`
+}
+
+type LibraryChangesResult struct {
+	Total     int                  `json:"total"`
+	Limit     int                  `json:"limit"`
+	Offset    int                  `json:"offset"`
+	Items     []*LibraryChangeItem `json:"items"`
+	UpdatedAt time.Time            `json:"updated_at"`
+}
+
+type LibraryVersionDiffQuery struct {
+	FromVersionID int64
+	ToVersionID   int64
+	ExecutorRef   string
+}
+
+type LibraryVersionDiffVersion struct {
+	ID        int64          `json:"id"`
+	VersionNo int            `json:"version_no"`
+	ChangedAt time.Time      `json:"changed_at"`
+	Data      map[string]any `json:"data"`
+}
+
+type LibraryVersionDiffResult struct {
+	Type          string                     `json:"type"`
+	LibraryID     int64                      `json:"library_id"`
+	FromVersion   *LibraryVersionDiffVersion `json:"from_version,omitempty"`
+	ToVersion     *LibraryVersionDiffVersion `json:"to_version,omitempty"`
+	ChangedFields []string                   `json:"changed_fields"`
+	Summary       string                     `json:"summary"`
+	UpdatedAt     time.Time                  `json:"updated_at"`
+}
+
 type LibraryRelationsQuery struct {
-	Limit int
+	Limit          int
+	ExecutorRef    string
+	IncludeHistory bool
+	ValidOn        *time.Time
 }
 
 type LibraryRelationNode struct {
@@ -374,6 +452,25 @@ type LibraryRelationGraph struct {
 	UpdatedAt time.Time              `json:"updated_at"`
 }
 
+type LibraryQualityCheck struct {
+	Code     string           `json:"code"`
+	Name     string           `json:"name"`
+	Severity string           `json:"severity"`
+	Status   string           `json:"status"`
+	Count    int              `json:"count"`
+	Message  string           `json:"message"`
+	Samples  []map[string]any `json:"samples"`
+}
+
+type LibrariesQualityGate struct {
+	Status        string                 `json:"status"`
+	TotalChecks   int                    `json:"total_checks"`
+	FailedChecks  int                    `json:"failed_checks"`
+	WarningChecks int                    `json:"warning_checks"`
+	Checks        []*LibraryQualityCheck `json:"checks"`
+	UpdatedAt     time.Time              `json:"updated_at"`
+}
+
 type Store interface {
 	GetOverview(ctx context.Context, tenantID int, from, to time.Time) (*Overview, error)
 	GetCompanyReport(ctx context.Context, tenantID int, from, to time.Time) ([]*CompanyReport, error)
@@ -383,10 +480,13 @@ type Store interface {
 	GetQualificationReport(ctx context.Context, tenantID int, reportYear int) (*QualificationReport, error)
 	GetRiskEvents(ctx context.Context, tenantID int, from time.Time) ([]*RiskEvent, error)
 	GetThreeLibrariesOverview(ctx context.Context, tenantID int, query ThreeLibrariesQuery) (*ThreeLibrariesOverview, error)
-	GetLibraryDetail(ctx context.Context, tenantID int, libraryType string, id int64) (any, error)
+	GetLibraryDetail(ctx context.Context, tenantID int, libraryType string, id int64, executorRef string, includeHistory bool, validOn *time.Time) (any, error)
 	GetExecutorCredentialVault(ctx context.Context, tenantID int, executorRef string, drawingLimit int) (*ExecutorCredentialVault, error)
 	SearchLibraries(ctx context.Context, tenantID int, query LibrarySearchQuery) (*LibrarySearchResult, error)
+	GetLibraryChanges(ctx context.Context, tenantID int, libraryType string, id int64, query LibraryChangesQuery) (*LibraryChangesResult, error)
+	GetLibraryVersionDiff(ctx context.Context, tenantID int, libraryType string, id int64, query LibraryVersionDiffQuery) (*LibraryVersionDiffResult, error)
 	GetLibraryRelations(ctx context.Context, tenantID int, libraryType string, id int64, query LibraryRelationsQuery) (*LibraryRelationGraph, error)
+	GetLibrariesQualityGate(ctx context.Context, tenantID int, sampleLimit int) (*LibrariesQualityGate, error)
 }
 
 type Service struct {
@@ -443,8 +543,8 @@ func (s *Service) GetThreeLibrariesOverview(ctx context.Context, query ThreeLibr
 	return s.store.GetThreeLibrariesOverview(ctx, s.tenantID, query)
 }
 
-func (s *Service) GetLibraryDetail(ctx context.Context, libraryType string, id int64) (any, error) {
-	return s.store.GetLibraryDetail(ctx, s.tenantID, libraryType, id)
+func (s *Service) GetLibraryDetail(ctx context.Context, libraryType string, id int64, executorRef string, includeHistory bool, validOn *time.Time) (any, error) {
+	return s.store.GetLibraryDetail(ctx, s.tenantID, libraryType, id, executorRef, includeHistory, validOn)
 }
 
 func (s *Service) GetExecutorCredentialVault(ctx context.Context, executorRef string, drawingLimit int) (*ExecutorCredentialVault, error) {
@@ -455,8 +555,20 @@ func (s *Service) SearchLibraries(ctx context.Context, query LibrarySearchQuery)
 	return s.store.SearchLibraries(ctx, s.tenantID, query)
 }
 
+func (s *Service) GetLibraryChanges(ctx context.Context, libraryType string, id int64, query LibraryChangesQuery) (*LibraryChangesResult, error) {
+	return s.store.GetLibraryChanges(ctx, s.tenantID, libraryType, id, query)
+}
+
+func (s *Service) GetLibraryVersionDiff(ctx context.Context, libraryType string, id int64, query LibraryVersionDiffQuery) (*LibraryVersionDiffResult, error) {
+	return s.store.GetLibraryVersionDiff(ctx, s.tenantID, libraryType, id, query)
+}
+
 func (s *Service) GetLibraryRelations(ctx context.Context, libraryType string, id int64, query LibraryRelationsQuery) (*LibraryRelationGraph, error) {
 	return s.store.GetLibraryRelations(ctx, s.tenantID, libraryType, id, query)
+}
+
+func (s *Service) GetLibrariesQualityGate(ctx context.Context, sampleLimit int) (*LibrariesQualityGate, error) {
+	return s.store.GetLibrariesQualityGate(ctx, s.tenantID, sampleLimit)
 }
 
 func (s *PGStore) GetOverview(ctx context.Context, tenantID int, from, to time.Time) (*Overview, error) {
@@ -957,7 +1069,7 @@ func (s *PGStore) GetThreeLibrariesOverview(ctx context.Context, tenantID int, q
 		UpdatedAt: time.Now().UTC(),
 	}
 
-	quals, qualTotal, err := s.listQualificationLibrary(ctx, tenantID, query.QualificationLimit, query.QualificationOffset)
+	quals, qualTotal, err := s.listQualificationLibrary(ctx, tenantID, query.QualificationLimit, query.QualificationOffset, query.ExecutorRef)
 	if err != nil {
 		if !isMissingRelationErr(err, "qualifications") {
 			return nil, err
@@ -967,7 +1079,15 @@ func (s *PGStore) GetThreeLibrariesOverview(ctx context.Context, tenantID int, q
 		out.Qualifications.Total = qualTotal
 	}
 
-	standards, standardTotal, err := s.listEngineeringStandards(ctx, tenantID, query.StandardLimit, query.StandardOffset)
+	standards, standardTotal, err := s.listEngineeringStandards(
+		ctx,
+		tenantID,
+		query.StandardLimit,
+		query.StandardOffset,
+		query.ExecutorRef,
+		query.IncludeHistory,
+		query.ValidOn,
+	)
 	if err != nil {
 		if !isMissingRelationErr(err, "drawings", "drawing_attachments") {
 			return nil, err
@@ -977,7 +1097,15 @@ func (s *PGStore) GetThreeLibrariesOverview(ctx context.Context, tenantID int, q
 		out.EngineeringStandard.Total = standardTotal
 	}
 
-	regulations, regulationTotal, err := s.listRegulations(ctx, tenantID, query.RegulationLimit, query.RegulationOffset)
+	regulations, regulationTotal, err := s.listRegulations(
+		ctx,
+		tenantID,
+		query.RegulationLimit,
+		query.RegulationOffset,
+		query.ExecutorRef,
+		query.IncludeHistory,
+		query.ValidOn,
+	)
 	if err != nil {
 		if !isMissingRelationErr(err, "regulation_documents") {
 			return nil, err
@@ -998,6 +1126,18 @@ func (s *PGStore) SearchLibraries(ctx context.Context, tenantID int, query Libra
 	case "", "qualification", "standard", "regulation":
 	default:
 		return nil, fmt.Errorf("unsupported library type: %s", query.Type)
+	}
+
+	args := make([]any, 0, 12)
+	args = append(args, tenantID)
+	validOnArg := 0
+	if !query.IncludeHistory {
+		effectiveAt := time.Now().UTC()
+		if query.ValidOn != nil {
+			effectiveAt = query.ValidOn.UTC()
+		}
+		args = append(args, effectiveAt)
+		validOnArg = len(args)
 	}
 
 	parts := make([]string, 0, 3)
@@ -1055,6 +1195,29 @@ func (s *PGStore) SearchLibraries(ctx context.Context, tenantID int, query Libra
 		if hasDrawingsDeleted {
 			drawWhere += " AND d.deleted = FALSE"
 		}
+		if !query.IncludeHistory {
+			hasDrawingVersions, verErr := s.hasColumn(ctx, "drawing_versions", "id")
+			if verErr != nil {
+				return nil, verErr
+			}
+			hasDrawingVersionRows := false
+			if hasDrawingVersions {
+				hasDrawingVersionRows, verErr = s.hasTenantRows(ctx, "drawing_versions", tenantID)
+				if verErr != nil {
+					return nil, verErr
+				}
+			}
+			if hasDrawingVersions && hasDrawingVersionRows && validOnArg > 0 {
+				drawWhere += fmt.Sprintf(` AND EXISTS (
+					SELECT 1
+					FROM drawing_versions dv
+					WHERE dv.tenant_id = d.tenant_id
+					  AND dv.drawing_no = `+drawingNoExpr+`
+					  AND COALESCE(dv.status, '') <> 'REVOKED'
+					  AND dv.created_at <= $%d
+				)`, validOnArg)
+			}
+		}
 
 		executorJoin := "LEFT JOIN LATERAL (SELECT ''::text AS executor_ref) ex ON TRUE"
 		if hasQualifications && hasQualificationAssignments {
@@ -1093,6 +1256,58 @@ func (s *PGStore) SearchLibraries(ctx context.Context, tenantID int, query Libra
 		return nil, err
 	}
 	if hasRegulations {
+		regWhere := "r.tenant_id = $1 AND COALESCE(r.deleted, FALSE) = FALSE"
+		if !query.IncludeHistory {
+			hasRegVersions, verErr := s.hasColumn(ctx, "regulation_versions", "id")
+			if verErr != nil {
+				return nil, verErr
+			}
+			if hasRegVersions {
+				regWhere += fmt.Sprintf(` AND EXISTS (
+					SELECT 1
+					FROM regulation_versions rv
+					WHERE rv.tenant_id = r.tenant_id
+					  AND rv.document_id = r.id
+					  AND COALESCE(rv.effective_from, '-infinity'::timestamptz) <= $%d
+					  AND COALESCE(rv.effective_to, 'infinity'::timestamptz) >= $%d
+				)`, validOnArg, validOnArg)
+			}
+		}
+
+		regProjectExpr := "''::text"
+		hasRegProjectRef, regProjErr := s.hasColumn(ctx, "regulation_documents", "project_ref")
+		if regProjErr != nil {
+			return nil, regProjErr
+		}
+		if hasRegProjectRef {
+			regProjectExpr = "COALESCE(r.project_ref, '')"
+		}
+
+		regExecutorExpr := "''::text"
+		regJoin := ""
+		hasRegExecutorRef, regExecErr := s.hasColumn(ctx, "regulation_documents", "executor_ref")
+		if regExecErr != nil {
+			return nil, regExecErr
+		}
+		if hasRegExecutorRef {
+			regExecutorExpr = "COALESCE(r.executor_ref, '')"
+		} else if hasRegProjectRef && hasQualifications && hasQualificationAssignments {
+			regJoin = `LEFT JOIN LATERAL (
+				SELECT COALESCE(q.executor_ref, '') AS executor_ref
+				FROM qualification_assignments a
+				JOIN qualifications q
+				  ON q.id = a.qualification_id
+				 AND q.tenant_id = a.tenant_id
+				 AND COALESCE(q.deleted, FALSE) = FALSE
+				WHERE a.tenant_id = r.tenant_id
+				  AND a.project_ref = r.project_ref
+				  AND COALESCE(q.executor_ref, '') <> ''
+				ORDER BY a.created_at DESC, a.id DESC
+				LIMIT 1
+			) rex ON TRUE`
+			regExecutorExpr = "COALESCE(rex.executor_ref, '')"
+		}
+
 		parts = append(parts, `
 			SELECT 'regulation'::text AS type,
 			       r.id,
@@ -1100,12 +1315,12 @@ func (s *PGStore) SearchLibraries(ctx context.Context, tenantID int, query Libra
 			       COALESCE(r.doc_no, '') AS subtitle,
 			       COALESCE(r.status, '') AS status,
 			       r.updated_at,
-			       ''::text AS executor_ref,
-			       ''::text AS project_ref,
-			       FALSE AS has_executor
+			       `+regExecutorExpr+` AS executor_ref,
+			       `+regProjectExpr+` AS project_ref,
+			       (`+regExecutorExpr+` <> '') AS has_executor
 			FROM regulation_documents r
-			WHERE r.tenant_id = $1
-			  AND COALESCE(r.deleted, FALSE) = FALSE`)
+			`+regJoin+`
+			WHERE `+regWhere)
 	}
 
 	out := &LibrarySearchResult{
@@ -1122,8 +1337,6 @@ func (s *PGStore) SearchLibraries(ctx context.Context, tenantID int, query Libra
 	         FROM (` + strings.Join(parts, "\nUNION ALL\n") + `) x`
 
 	where := make([]string, 0, 8)
-	args := make([]any, 0, 10)
-	args = append(args, tenantID)
 
 	if typeFilter != "" {
 		args = append(args, typeFilter)
@@ -1151,6 +1364,10 @@ func (s *PGStore) SearchLibraries(ctx context.Context, tenantID int, query Libra
 	if query.HasExecutor != nil {
 		args = append(args, *query.HasExecutor)
 		where = append(where, fmt.Sprintf("x.has_executor = $%d", len(args)))
+	}
+	if execRef := strings.TrimSpace(query.ExecutorRef); execRef != "" {
+		args = append(args, execRef)
+		where = append(where, fmt.Sprintf("x.executor_ref = $%d", len(args)))
 	}
 
 	filterSQL := base
@@ -1198,9 +1415,186 @@ func (s *PGStore) SearchLibraries(ctx context.Context, tenantID int, query Libra
 	return out, nil
 }
 
+func (s *PGStore) GetLibraryChanges(ctx context.Context, tenantID int, libraryType string, id int64, query LibraryChangesQuery) (*LibraryChangesResult, error) {
+	query = normalizeLibraryChangesQuery(query)
+	normalizedType := normalizeLibraryType(libraryType)
+	if query.ExecutorRef != "" {
+		allowed, err := s.isLibraryVisibleToExecutor(ctx, tenantID, normalizedType, id, query.ExecutorRef, query.IncludeHistory, query.ValidOn)
+		if err != nil {
+			return nil, err
+		}
+		if !allowed {
+			return nil, nil
+		}
+	}
+	if normalizedType == "regulation" && !query.IncludeHistory {
+		ok, err := s.regulationIsEffectiveOn(ctx, tenantID, id, query.ValidOn)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, nil
+		}
+	}
+
+	var (
+		items []*LibraryChangeItem
+		found bool
+		err   error
+	)
+	switch normalizedType {
+	case "qualification":
+		items, found, err = s.collectQualificationChanges(ctx, tenantID, id, query)
+	case "standard":
+		items, found, err = s.collectStandardChanges(ctx, tenantID, id, query)
+	case "regulation":
+		items, found, err = s.collectRegulationChanges(ctx, tenantID, id, query)
+	default:
+		return nil, fmt.Errorf("unsupported library type: %s", libraryType)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, nil
+	}
+
+	filtered := make([]*LibraryChangeItem, 0, len(items))
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		changedAt := item.ChangedAt.UTC()
+		if query.From != nil && changedAt.Before(query.From.UTC()) {
+			continue
+		}
+		if query.To != nil && changedAt.After(query.To.UTC()) {
+			continue
+		}
+		item.ChangedAt = changedAt
+		item.Type = normalizeLibraryType(item.Type)
+		item.EventType = strings.TrimSpace(item.EventType)
+		item.Source = strings.TrimSpace(item.Source)
+		item.Summary = strings.TrimSpace(item.Summary)
+		if item.Type == "" {
+			item.Type = normalizedType
+		}
+		if item.EventType == "" {
+			item.EventType = "updated"
+		}
+		if item.Source == "" {
+			item.Source = item.Type
+		}
+		filtered = append(filtered, item)
+	}
+
+	sort.Slice(filtered, func(i, j int) bool {
+		if filtered[i].ChangedAt.Equal(filtered[j].ChangedAt) {
+			if filtered[i].ID == filtered[j].ID {
+				return filtered[i].EventType < filtered[j].EventType
+			}
+			return filtered[i].ID > filtered[j].ID
+		}
+		return filtered[i].ChangedAt.After(filtered[j].ChangedAt)
+	})
+
+	out := &LibraryChangesResult{
+		Total:     len(filtered),
+		Limit:     query.Limit,
+		Offset:    query.Offset,
+		Items:     make([]*LibraryChangeItem, 0),
+		UpdatedAt: time.Now().UTC(),
+	}
+	if out.Total == 0 || out.Offset >= out.Total {
+		return out, nil
+	}
+
+	end := out.Offset + out.Limit
+	if end > out.Total {
+		end = out.Total
+	}
+	out.Items = append(out.Items, filtered[out.Offset:end]...)
+	return out, nil
+}
+
+func (s *PGStore) GetLibraryVersionDiff(ctx context.Context, tenantID int, libraryType string, id int64, query LibraryVersionDiffQuery) (*LibraryVersionDiffResult, error) {
+	query = normalizeLibraryVersionDiffQuery(query)
+	normalizedType := normalizeLibraryType(libraryType)
+	if query.ExecutorRef != "" {
+		allowed, err := s.isLibraryVisibleToExecutor(ctx, tenantID, normalizedType, id, query.ExecutorRef, true, nil)
+		if err != nil {
+			return nil, err
+		}
+		if !allowed {
+			return nil, nil
+		}
+	}
+
+	var (
+		fromVersion *LibraryVersionDiffVersion
+		toVersion   *LibraryVersionDiffVersion
+		found       bool
+		err         error
+	)
+	switch normalizedType {
+	case "standard":
+		fromVersion, toVersion, found, err = s.getStandardVersionDiff(ctx, tenantID, id, query.FromVersionID, query.ToVersionID)
+	case "regulation":
+		fromVersion, toVersion, found, err = s.getRegulationVersionDiff(ctx, tenantID, id, query.FromVersionID, query.ToVersionID)
+	default:
+		return nil, fmt.Errorf("unsupported library type for diff: %s", libraryType)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, nil
+	}
+
+	changedFields := make([]string, 0, 12)
+	summary := ""
+	switch {
+	case toVersion == nil:
+		summary = "no versions found"
+	case fromVersion == nil:
+		summary = fmt.Sprintf("only one version available: v%d", toVersion.VersionNo)
+		for key := range toVersion.Data {
+			changedFields = append(changedFields, key)
+		}
+	default:
+		changedFields = diffChangedFields(fromVersion.Data, toVersion.Data)
+		if len(changedFields) == 0 {
+			summary = fmt.Sprintf("v%d -> v%d, no field changes", fromVersion.VersionNo, toVersion.VersionNo)
+		} else {
+			summary = fmt.Sprintf("v%d -> v%d, %d fields changed", fromVersion.VersionNo, toVersion.VersionNo, len(changedFields))
+		}
+	}
+	sort.Strings(changedFields)
+
+	return &LibraryVersionDiffResult{
+		Type:          normalizedType,
+		LibraryID:     id,
+		FromVersion:   fromVersion,
+		ToVersion:     toVersion,
+		ChangedFields: changedFields,
+		Summary:       summary,
+		UpdatedAt:     time.Now().UTC(),
+	}, nil
+}
+
 func (s *PGStore) GetLibraryRelations(ctx context.Context, tenantID int, libraryType string, id int64, query LibraryRelationsQuery) (*LibraryRelationGraph, error) {
 	query = normalizeLibraryRelationsQuery(query)
-	switch normalizeLibraryType(libraryType) {
+	normalizedType := normalizeLibraryType(libraryType)
+	if query.ExecutorRef != "" {
+		allowed, err := s.isLibraryVisibleToExecutor(ctx, tenantID, normalizedType, id, query.ExecutorRef, query.IncludeHistory, query.ValidOn)
+		if err != nil {
+			return nil, err
+		}
+		if !allowed {
+			return nil, nil
+		}
+	}
+	switch normalizedType {
 	case "qualification":
 		return s.getQualificationRelations(ctx, tenantID, id, query)
 	case "standard":
@@ -1305,6 +1699,9 @@ func (s *PGStore) getQualificationRelations(ctx context.Context, tenantID int, i
 	if err := s.appendProjectDrawingRelations(ctx, tenantID, builder, projectRefs, query.Limit*2); err != nil {
 		return nil, err
 	}
+	if err := s.appendProjectRegulationRelations(ctx, tenantID, builder, projectRefs, query.IncludeHistory, query.ValidOn, query.Limit*2); err != nil {
+		return nil, err
+	}
 	return builder.build("qualification", id), nil
 }
 
@@ -1352,6 +1749,31 @@ func (s *PGStore) getEngineeringStandardRelations(ctx context.Context, tenantID 
 		Status:      status,
 		Ref:         projectRef,
 	})
+	versions, hasVersionTable, verErr := s.listDrawingVersions(ctx, tenantID, drawingNo, query.IncludeHistory, query.ValidOn, query.Limit)
+	if verErr != nil {
+		return nil, verErr
+	}
+	if !query.IncludeHistory && hasVersionTable && len(versions) == 0 {
+		return nil, nil
+	}
+	for _, ver := range versions {
+		if ver == nil {
+			continue
+		}
+		verNodeRef := fmt.Sprintf("standard_version:%d", ver.ID)
+		verLabel := fmt.Sprintf("v%d", ver.VersionNo)
+		if s := strings.TrimSpace(ver.Status); s != "" {
+			verLabel += " / " + s
+		}
+		builder.addNode(&LibraryRelationNode{
+			NodeRef:  verNodeRef,
+			NodeType: "standard_version",
+			ID:       ver.ID,
+			Label:    verLabel,
+			Status:   strings.TrimSpace(ver.Status),
+		})
+		builder.addEdge(rootRef, verNodeRef, "has_version")
+	}
 
 	projectRef = strings.TrimSpace(projectRef)
 	if projectRef != "" {
@@ -1441,22 +1863,49 @@ func (s *PGStore) getEngineeringStandardRelations(ctx context.Context, tenantID 
 		if err := s.appendProjectDrawingRelations(ctx, tenantID, builder, []string{projectRef}, query.Limit); err != nil {
 			return nil, err
 		}
+		if err := s.appendProjectRegulationRelations(ctx, tenantID, builder, []string{projectRef}, query.IncludeHistory, query.ValidOn, query.Limit); err != nil {
+			return nil, err
+		}
 	}
 	return builder.build("standard", id), nil
 }
 
 func (s *PGStore) getRegulationRelations(ctx context.Context, tenantID int, id int64, query LibraryRelationsQuery) (*LibraryRelationGraph, error) {
-	var title, docNo, status, category string
-	err := s.db.QueryRowContext(ctx, `
-		SELECT COALESCE(title, ''), COALESCE(doc_no, ''), COALESCE(status, ''), COALESCE(category, '')
+	hasRegProjectRef, err := s.hasColumn(ctx, "regulation_documents", "project_ref")
+	if err != nil {
+		return nil, err
+	}
+
+	var title, docNo, status, category, projectRef string
+	regQuery := `
+		SELECT COALESCE(title, ''), COALESCE(doc_no, ''), COALESCE(status, ''), COALESCE(category, '')`
+	if hasRegProjectRef {
+		regQuery += `, COALESCE(project_ref, '')`
+	}
+	regQuery += `
 		FROM regulation_documents
 		WHERE tenant_id=$1 AND id=$2 AND COALESCE(deleted, FALSE)=FALSE
-	`, tenantID, id).Scan(&title, &docNo, &status, &category)
+	`
+
+	if hasRegProjectRef {
+		err = s.db.QueryRowContext(ctx, regQuery, tenantID, id).Scan(&title, &docNo, &status, &category, &projectRef)
+	} else {
+		err = s.db.QueryRowContext(ctx, regQuery, tenantID, id).Scan(&title, &docNo, &status, &category)
+	}
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
+	}
+	if !query.IncludeHistory {
+		ok, checkErr := s.regulationIsEffectiveOn(ctx, tenantID, id, query.ValidOn)
+		if checkErr != nil {
+			return nil, checkErr
+		}
+		if !ok {
+			return nil, nil
+		}
 	}
 
 	builder := newRelationGraphBuilder()
@@ -1475,20 +1924,118 @@ func (s *PGStore) getRegulationRelations(ctx context.Context, tenantID int, id i
 		ID:          id,
 		Label:       label,
 		Status:      status,
+		Ref:         projectRef,
 	})
+
+	projectRef = strings.TrimSpace(projectRef)
+	if projectRef != "" {
+		projectNodeRef := "project:" + projectRef
+		builder.addNode(&LibraryRelationNode{
+			NodeRef:  projectNodeRef,
+			NodeType: "project",
+			Ref:      projectRef,
+			Label:    s.projectLabelByRef(ctx, tenantID, projectRef),
+		})
+		builder.addEdge(projectNodeRef, rootRef, "applies_regulation")
+
+		hasAssignments, err := s.hasColumn(ctx, "qualification_assignments", "id")
+		if err != nil {
+			return nil, err
+		}
+		hasQualifications, err := s.hasColumn(ctx, "qualifications", "id")
+		if err != nil {
+			return nil, err
+		}
+		if hasAssignments && hasQualifications {
+			rows, qErr := s.db.QueryContext(ctx, `
+				SELECT q.id,
+				       COALESCE(q.qual_type, ''),
+				       COALESCE(q.holder_name, ''),
+				       COALESCE(q.executor_ref, ''),
+				       COALESCE(q.status, '')
+				FROM qualification_assignments a
+				JOIN qualifications q
+				  ON q.id = a.qualification_id
+				 AND q.tenant_id = a.tenant_id
+				 AND COALESCE(q.deleted, FALSE)=FALSE
+				WHERE a.tenant_id=$1 AND a.project_ref=$2
+				ORDER BY a.created_at DESC, a.id DESC
+				LIMIT $3
+			`, tenantID, projectRef, query.Limit)
+			if qErr != nil {
+				return nil, qErr
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var qualID int64
+				var qualType, holderName, executorRef, qualStatus string
+				if scanErr := rows.Scan(&qualID, &qualType, &holderName, &executorRef, &qualStatus); scanErr != nil {
+					return nil, scanErr
+				}
+				qualNodeRef := fmt.Sprintf("qualification:%d", qualID)
+				qualLabel := strings.TrimSpace(qualType)
+				if qualLabel == "" {
+					qualLabel = fmt.Sprintf("qualification-%d", qualID)
+				}
+				if holder := strings.TrimSpace(holderName); holder != "" {
+					qualLabel += " / " + holder
+				}
+				builder.addNode(&LibraryRelationNode{
+					NodeRef:     qualNodeRef,
+					NodeType:    "qualification",
+					LibraryType: "qualification",
+					ID:          qualID,
+					Label:       qualLabel,
+					Status:      qualStatus,
+				})
+				builder.addEdge(projectNodeRef, qualNodeRef, "requires_qualification")
+				if exec := strings.TrimSpace(executorRef); exec != "" {
+					execNodeRef := "executor:" + exec
+					builder.addNode(&LibraryRelationNode{
+						NodeRef:  execNodeRef,
+						NodeType: "executor",
+						Ref:      exec,
+						Label:    s.executorLabelByRef(ctx, tenantID, exec),
+					})
+					builder.addEdge(qualNodeRef, execNodeRef, "held_by")
+				}
+			}
+			if rowsErr := rows.Err(); rowsErr != nil {
+				return nil, rowsErr
+			}
+		}
+		if err := s.appendProjectDrawingRelations(ctx, tenantID, builder, []string{projectRef}, query.Limit); err != nil {
+			return nil, err
+		}
+	}
 
 	hasVersions, err := s.hasColumn(ctx, "regulation_versions", "id")
 	if err != nil {
 		return nil, err
 	}
 	if hasVersions {
+		versionWhere := "tenant_id=$1 AND document_id=$2"
+		queryArgs := []any{tenantID, id}
+		limit := query.Limit
+		if !query.IncludeHistory {
+			effectiveAt := time.Now().UTC()
+			if query.ValidOn != nil {
+				effectiveAt = query.ValidOn.UTC()
+			}
+			queryArgs = append(queryArgs, effectiveAt)
+			argIdx := len(queryArgs)
+			versionWhere += fmt.Sprintf(" AND COALESCE(effective_from, '-infinity'::timestamptz) <= $%d AND COALESCE(effective_to, 'infinity'::timestamptz) >= $%d", argIdx, argIdx)
+			limit = 1
+		}
+		queryArgs = append(queryArgs, limit)
+		limitArg := len(queryArgs)
 		rows, qErr := s.db.QueryContext(ctx, `
 			SELECT id, version_no, effective_from, effective_to
 			FROM regulation_versions
-			WHERE tenant_id=$1 AND document_id=$2
+			WHERE `+versionWhere+`
 			ORDER BY version_no DESC, id DESC
-			LIMIT $3
-		`, tenantID, id, query.Limit)
+			LIMIT $`+strconv.Itoa(limitArg)+`
+		`, queryArgs...)
 		if qErr != nil {
 			return nil, qErr
 		}
@@ -1566,17 +2113,500 @@ func (s *PGStore) getRegulationRelations(ctx context.Context, tenantID int, id i
 	return builder.build("regulation", id), nil
 }
 
-func (s *PGStore) GetLibraryDetail(ctx context.Context, tenantID int, libraryType string, id int64) (any, error) {
-	switch normalizeLibraryType(libraryType) {
+func (s *PGStore) GetLibraryDetail(ctx context.Context, tenantID int, libraryType string, id int64, executorRef string, includeHistory bool, validOn *time.Time) (any, error) {
+	normalizedType := normalizeLibraryType(libraryType)
+	executorRef = strings.TrimSpace(executorRef)
+	if executorRef != "" {
+		allowed, err := s.isLibraryVisibleToExecutor(ctx, tenantID, normalizedType, id, executorRef, includeHistory, validOn)
+		if err != nil {
+			return nil, err
+		}
+		if !allowed {
+			return nil, nil
+		}
+	}
+	if normalizedType == "regulation" && !includeHistory {
+		ok, err := s.regulationIsEffectiveOn(ctx, tenantID, id, validOn)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, nil
+		}
+	}
+	switch normalizedType {
 	case "qualification":
 		return s.getQualificationLibraryDetail(ctx, tenantID, id)
 	case "standard":
-		return s.getEngineeringStandardDetail(ctx, tenantID, id)
+		return s.getEngineeringStandardDetail(ctx, tenantID, id, includeHistory, validOn)
 	case "regulation":
-		return s.getRegulationLibraryDetail(ctx, tenantID, id)
+		return s.getRegulationLibraryDetail(ctx, tenantID, id, includeHistory, validOn)
 	default:
 		return nil, fmt.Errorf("unsupported library type: %s", libraryType)
 	}
+}
+
+func (s *PGStore) GetLibrariesQualityGate(ctx context.Context, tenantID int, sampleLimit int) (*LibrariesQualityGate, error) {
+	sampleLimit = normalizePageLimit(sampleLimit)
+	out := &LibrariesQualityGate{
+		Status:    "GREEN",
+		Checks:    make([]*LibraryQualityCheck, 0, 8),
+		UpdatedAt: time.Now().UTC(),
+	}
+
+	appendCheck := func(check *LibraryQualityCheck) {
+		if check == nil {
+			return
+		}
+		check.Code = strings.TrimSpace(check.Code)
+		check.Name = strings.TrimSpace(check.Name)
+		check.Severity = strings.ToUpper(strings.TrimSpace(check.Severity))
+		check.Status = strings.ToUpper(strings.TrimSpace(check.Status))
+		check.Message = strings.TrimSpace(check.Message)
+		if check.Name == "" {
+			check.Name = check.Code
+		}
+		if check.Severity == "" {
+			check.Severity = "ERROR"
+		}
+		if check.Status == "" {
+			check.Status = "PASS"
+		}
+		if check.Samples == nil {
+			check.Samples = make([]map[string]any, 0)
+		}
+		out.Checks = append(out.Checks, check)
+		if check.Status == "FAIL" {
+			if check.Severity == "WARN" {
+				out.WarningChecks++
+			} else {
+				out.FailedChecks++
+			}
+		}
+	}
+
+	tableExists := func(tableName string) (bool, error) {
+		return s.hasColumn(ctx, tableName, "id")
+	}
+
+	hasAssignments, err := tableExists("qualification_assignments")
+	if err != nil {
+		return nil, err
+	}
+	hasQualifications, err := tableExists("qualifications")
+	if err != nil {
+		return nil, err
+	}
+	hasProjects, err := s.hasColumn(ctx, "project_nodes", "ref")
+	if err != nil {
+		return nil, err
+	}
+	hasRegDocs, err := tableExists("regulation_documents")
+	if err != nil {
+		return nil, err
+	}
+	hasRegVersions, err := tableExists("regulation_versions")
+	if err != nil {
+		return nil, err
+	}
+
+	qualDeletedExpr := ""
+	if hasQualifications {
+		hasQualDeleted, qErr := s.hasColumn(ctx, "qualifications", "deleted")
+		if qErr != nil {
+			return nil, qErr
+		}
+		if hasQualDeleted {
+			qualDeletedExpr = " AND COALESCE(q.deleted, FALSE)=FALSE"
+		}
+	}
+
+	regDeletedExpr := ""
+	if hasRegDocs {
+		hasRegDeleted, rErr := s.hasColumn(ctx, "regulation_documents", "deleted")
+		if rErr != nil {
+			return nil, rErr
+		}
+		if hasRegDeleted {
+			regDeletedExpr = " AND COALESCE(deleted, FALSE)=FALSE"
+		}
+	}
+
+	projectDeletedExpr := ""
+	if hasProjects {
+		hasProjectDeleted, pErr := s.hasColumn(ctx, "project_nodes", "deleted")
+		if pErr != nil {
+			return nil, pErr
+		}
+		if hasProjectDeleted {
+			projectDeletedExpr = " AND COALESCE(p.deleted, FALSE)=FALSE"
+		}
+	}
+
+	if !hasAssignments || !hasQualifications {
+		appendCheck(&LibraryQualityCheck{
+			Code:     "ORPHAN_ASSIGNMENT_QUALIFICATION",
+			Name:     "孤儿关联(资质)",
+			Severity: "ERROR",
+			Status:   "SKIP",
+			Message:  "qualification_assignments 或 qualifications 表缺失，跳过检查",
+		})
+	} else {
+		var count int
+		err = s.db.QueryRowContext(ctx, `
+			SELECT COUNT(*)
+			FROM qualification_assignments a
+			LEFT JOIN qualifications q
+			  ON q.id = a.qualification_id
+			 AND q.tenant_id = a.tenant_id`+qualDeletedExpr+`
+			WHERE a.tenant_id=$1
+			  AND q.id IS NULL
+		`, tenantID).Scan(&count)
+		if err != nil {
+			return nil, err
+		}
+		check := &LibraryQualityCheck{
+			Code:     "ORPHAN_ASSIGNMENT_QUALIFICATION",
+			Name:     "孤儿关联(资质)",
+			Severity: "ERROR",
+			Status:   "PASS",
+			Count:    count,
+			Message:  "qualification_assignments.qualification_id 未匹配有效资质",
+			Samples:  make([]map[string]any, 0),
+		}
+		if count > 0 {
+			check.Status = "FAIL"
+			rows, qErr := s.db.QueryContext(ctx, `
+				SELECT a.id, a.qualification_id, COALESCE(a.project_ref, ''), COALESCE(a.status, '')
+				FROM qualification_assignments a
+				LEFT JOIN qualifications q
+				  ON q.id = a.qualification_id
+				 AND q.tenant_id = a.tenant_id`+qualDeletedExpr+`
+				WHERE a.tenant_id=$1
+				  AND q.id IS NULL
+				ORDER BY a.id DESC
+				LIMIT $2
+			`, tenantID, sampleLimit)
+			if qErr != nil {
+				return nil, qErr
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var rowID, qualificationID int64
+				var projectRef, status string
+				if scanErr := rows.Scan(&rowID, &qualificationID, &projectRef, &status); scanErr != nil {
+					return nil, scanErr
+				}
+				check.Samples = append(check.Samples, map[string]any{
+					"id":               rowID,
+					"qualification_id": qualificationID,
+					"library_type":     "qualification",
+					"library_id":       qualificationID,
+					"project_ref":      projectRef,
+					"status":           status,
+				})
+			}
+			if rowsErr := rows.Err(); rowsErr != nil {
+				return nil, rowsErr
+			}
+		}
+		appendCheck(check)
+	}
+
+	if !hasAssignments || !hasProjects {
+		appendCheck(&LibraryQualityCheck{
+			Code:     "ORPHAN_ASSIGNMENT_PROJECT",
+			Name:     "孤儿关联(项目)",
+			Severity: "ERROR",
+			Status:   "SKIP",
+			Message:  "qualification_assignments 或 project_nodes 表缺失，跳过检查",
+		})
+	} else {
+		var count int
+		err = s.db.QueryRowContext(ctx, `
+			SELECT COUNT(*)
+			FROM qualification_assignments a
+			LEFT JOIN project_nodes p
+			  ON p.tenant_id = a.tenant_id
+			 AND p.ref = a.project_ref`+projectDeletedExpr+`
+			WHERE a.tenant_id=$1
+			  AND COALESCE(a.project_ref, '') <> ''
+			  AND p.ref IS NULL
+		`, tenantID).Scan(&count)
+		if err != nil {
+			return nil, err
+		}
+		check := &LibraryQualityCheck{
+			Code:     "ORPHAN_ASSIGNMENT_PROJECT",
+			Name:     "孤儿关联(项目)",
+			Severity: "ERROR",
+			Status:   "PASS",
+			Count:    count,
+			Message:  "qualification_assignments.project_ref 未匹配有效项目",
+			Samples:  make([]map[string]any, 0),
+		}
+		if count > 0 {
+			check.Status = "FAIL"
+			rows, qErr := s.db.QueryContext(ctx, `
+				SELECT a.id, a.qualification_id, COALESCE(a.project_ref, ''), COALESCE(a.status, '')
+				FROM qualification_assignments a
+				LEFT JOIN project_nodes p
+				  ON p.tenant_id = a.tenant_id
+				 AND p.ref = a.project_ref`+projectDeletedExpr+`
+				WHERE a.tenant_id=$1
+				  AND COALESCE(a.project_ref, '') <> ''
+				  AND p.ref IS NULL
+				ORDER BY a.id DESC
+				LIMIT $2
+			`, tenantID, sampleLimit)
+			if qErr != nil {
+				return nil, qErr
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var rowID, qualificationID int64
+				var projectRef, status string
+				if scanErr := rows.Scan(&rowID, &qualificationID, &projectRef, &status); scanErr != nil {
+					return nil, scanErr
+				}
+				check.Samples = append(check.Samples, map[string]any{
+					"id":               rowID,
+					"qualification_id": qualificationID,
+					"library_type":     "qualification",
+					"library_id":       qualificationID,
+					"project_ref":      projectRef,
+					"status":           status,
+				})
+			}
+			if rowsErr := rows.Err(); rowsErr != nil {
+				return nil, rowsErr
+			}
+		}
+		appendCheck(check)
+	}
+
+	if !hasRegDocs {
+		appendCheck(&LibraryQualityCheck{
+			Code:     "DUPLICATE_REGULATION_DOC_NO",
+			Name:     "重复文号",
+			Severity: "ERROR",
+			Status:   "SKIP",
+			Message:  "regulation_documents 表缺失，跳过检查",
+		})
+	} else {
+		var count int
+		err = s.db.QueryRowContext(ctx, `
+			SELECT COALESCE(SUM(dup.cnt), 0)::int
+			FROM (
+				SELECT COUNT(*)::int AS cnt
+				FROM regulation_documents
+				WHERE tenant_id=$1`+regDeletedExpr+`
+				  AND COALESCE(BTRIM(doc_no), '') <> ''
+				GROUP BY COALESCE(doc_no, '')
+				HAVING COUNT(*) > 1
+			) dup
+		`, tenantID).Scan(&count)
+		if err != nil {
+			return nil, err
+		}
+		check := &LibraryQualityCheck{
+			Code:     "DUPLICATE_REGULATION_DOC_NO",
+			Name:     "重复文号",
+			Severity: "ERROR",
+			Status:   "PASS",
+			Count:    count,
+			Message:  "法规库存在重复 doc_no",
+			Samples:  make([]map[string]any, 0),
+		}
+		if count > 0 {
+			check.Status = "FAIL"
+			rows, qErr := s.db.QueryContext(ctx, `
+				SELECT COALESCE(doc_no, ''), COUNT(*)::int AS cnt, MAX(id)::bigint AS sample_id
+				FROM regulation_documents
+				WHERE tenant_id=$1`+regDeletedExpr+`
+				  AND COALESCE(BTRIM(doc_no), '') <> ''
+				GROUP BY COALESCE(doc_no, '')
+				HAVING COUNT(*) > 1
+				ORDER BY cnt DESC, COALESCE(doc_no, '') ASC
+				LIMIT $2
+			`, tenantID, sampleLimit)
+			if qErr != nil {
+				return nil, qErr
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var docNo string
+				var dupCount int
+				var sampleID int64
+				if scanErr := rows.Scan(&docNo, &dupCount, &sampleID); scanErr != nil {
+					return nil, scanErr
+				}
+				check.Samples = append(check.Samples, map[string]any{
+					"doc_no":       docNo,
+					"count":        dupCount,
+					"library_type": "regulation",
+					"library_id":   sampleID,
+				})
+			}
+			if rowsErr := rows.Err(); rowsErr != nil {
+				return nil, rowsErr
+			}
+		}
+		appendCheck(check)
+	}
+
+	if !hasQualifications {
+		appendCheck(&LibraryQualityCheck{
+			Code:     "EMPTY_EXECUTOR_REF",
+			Name:     "空执行体编码",
+			Severity: "ERROR",
+			Status:   "SKIP",
+			Message:  "qualifications 表缺失，跳过检查",
+		})
+	} else {
+		qualWhere := "tenant_id=$1"
+		if qualDeletedExpr != "" {
+			qualWhere += " AND COALESCE(deleted, FALSE)=FALSE"
+		}
+		var count int
+		err = s.db.QueryRowContext(ctx, `
+			SELECT COUNT(*)
+			FROM qualifications
+			WHERE `+qualWhere+`
+			  AND COALESCE(BTRIM(executor_ref), '') = ''
+		`, tenantID).Scan(&count)
+		if err != nil {
+			return nil, err
+		}
+		check := &LibraryQualityCheck{
+			Code:     "EMPTY_EXECUTOR_REF",
+			Name:     "空执行体编码",
+			Severity: "ERROR",
+			Status:   "PASS",
+			Count:    count,
+			Message:  "资质记录 executor_ref 为空",
+			Samples:  make([]map[string]any, 0),
+		}
+		if count > 0 {
+			check.Status = "FAIL"
+			rows, qErr := s.db.QueryContext(ctx, `
+				SELECT id, COALESCE(qual_type, ''), COALESCE(holder_name, ''), COALESCE(status, '')
+				FROM qualifications
+				WHERE `+qualWhere+`
+				  AND COALESCE(BTRIM(executor_ref), '') = ''
+				ORDER BY updated_at DESC, id DESC
+				LIMIT $2
+			`, tenantID, sampleLimit)
+			if qErr != nil {
+				return nil, qErr
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var id int64
+				var qualType, holderName, status string
+				if scanErr := rows.Scan(&id, &qualType, &holderName, &status); scanErr != nil {
+					return nil, scanErr
+				}
+				check.Samples = append(check.Samples, map[string]any{
+					"id":           id,
+					"qual_type":    qualType,
+					"holder_name":  holderName,
+					"status":       status,
+					"library_type": "qualification",
+					"library_id":   id,
+				})
+			}
+			if rowsErr := rows.Err(); rowsErr != nil {
+				return nil, rowsErr
+			}
+		}
+		appendCheck(check)
+	}
+
+	if !hasRegDocs || !hasRegVersions {
+		appendCheck(&LibraryQualityCheck{
+			Code:     "REGULATION_WITHOUT_VERSION",
+			Name:     "法规无版本",
+			Severity: "ERROR",
+			Status:   "SKIP",
+			Message:  "regulation_documents 或 regulation_versions 表缺失，跳过检查",
+		})
+	} else {
+		var count int
+		err = s.db.QueryRowContext(ctx, `
+			SELECT COUNT(*)
+			FROM (
+				SELECT d.id
+				FROM regulation_documents d
+				LEFT JOIN regulation_versions v
+				  ON v.tenant_id=d.tenant_id
+				 AND v.document_id=d.id
+				WHERE d.tenant_id=$1`+strings.ReplaceAll(regDeletedExpr, "deleted", "d.deleted")+`
+				GROUP BY d.id
+				HAVING COUNT(v.id)=0
+			) x
+		`, tenantID).Scan(&count)
+		if err != nil {
+			return nil, err
+		}
+		check := &LibraryQualityCheck{
+			Code:     "REGULATION_WITHOUT_VERSION",
+			Name:     "法规无版本",
+			Severity: "ERROR",
+			Status:   "PASS",
+			Count:    count,
+			Message:  "法规文档缺少 regulation_versions 版本记录",
+			Samples:  make([]map[string]any, 0),
+		}
+		if count > 0 {
+			check.Status = "FAIL"
+			rows, qErr := s.db.QueryContext(ctx, `
+				SELECT d.id, COALESCE(d.doc_no, ''), COALESCE(d.title, '')
+				FROM regulation_documents d
+				LEFT JOIN regulation_versions v
+				  ON v.tenant_id=d.tenant_id
+				 AND v.document_id=d.id
+				WHERE d.tenant_id=$1`+strings.ReplaceAll(regDeletedExpr, "deleted", "d.deleted")+`
+				GROUP BY d.id, d.doc_no, d.title
+				HAVING COUNT(v.id)=0
+				ORDER BY d.id DESC
+				LIMIT $2
+			`, tenantID, sampleLimit)
+			if qErr != nil {
+				return nil, qErr
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var id int64
+				var docNo, title string
+				if scanErr := rows.Scan(&id, &docNo, &title); scanErr != nil {
+					return nil, scanErr
+				}
+				check.Samples = append(check.Samples, map[string]any{
+					"id":           id,
+					"doc_no":       docNo,
+					"title":        title,
+					"library_type": "regulation",
+					"library_id":   id,
+				})
+			}
+			if rowsErr := rows.Err(); rowsErr != nil {
+				return nil, rowsErr
+			}
+		}
+		appendCheck(check)
+	}
+
+	out.TotalChecks = len(out.Checks)
+	switch {
+	case out.FailedChecks > 0:
+		out.Status = "RED"
+	case out.WarningChecks > 0:
+		out.Status = "YELLOW"
+	default:
+		out.Status = "GREEN"
+	}
+	return out, nil
 }
 
 func (s *PGStore) GetExecutorCredentialVault(ctx context.Context, tenantID int, executorRef string, drawingLimit int) (*ExecutorCredentialVault, error) {
@@ -1591,6 +2621,7 @@ func (s *PGStore) GetExecutorCredentialVault(ctx context.Context, tenantID int, 
 		Qualifications: make([]*VaultQualification, 0),
 		Assignments:    make([]*QualificationAssignmentBrief, 0),
 		Drawings:       make([]*EngineeringStandardItem, 0),
+		Regulations:    make([]*RegulationLibraryItem, 0),
 		UpdatedAt:      time.Now().UTC(),
 	}
 
@@ -1770,6 +2801,161 @@ func (s *PGStore) GetExecutorCredentialVault(ctx context.Context, tenantID int, 
 	}
 	out.DrawingCount = len(out.Drawings)
 
+	if len(projectRefSet) > 0 {
+		projectRefs := make([]string, 0, len(projectRefSet))
+		for ref := range projectRefSet {
+			projectRefs = append(projectRefs, ref)
+		}
+
+		hasRegDocs, regErr := s.hasColumn(ctx, "regulation_documents", "id")
+		if regErr != nil {
+			return nil, regErr
+		}
+		hasRegProjectRef := false
+		if hasRegDocs {
+			hasRegProjectRef, regErr = s.hasColumn(ctx, "regulation_documents", "project_ref")
+			if regErr != nil {
+				return nil, regErr
+			}
+		}
+		if hasRegDocs && hasRegProjectRef {
+			hasRegDeleted, delErr := s.hasColumn(ctx, "regulation_documents", "deleted")
+			if delErr != nil {
+				return nil, delErr
+			}
+			hasRegVersions, verErr := s.hasColumn(ctx, "regulation_versions", "id")
+			if verErr != nil {
+				return nil, verErr
+			}
+
+			args := make([]any, 0, len(projectRefs)+3)
+			args = append(args, tenantID)
+			holders := make([]string, 0, len(projectRefs))
+			for i, ref := range projectRefs {
+				args = append(args, ref)
+				holders = append(holders, fmt.Sprintf("$%d", i+2))
+			}
+			whereClause := "r.tenant_id=$1 AND r.project_ref IN (" + strings.Join(holders, ",") + ")"
+			if hasRegDeleted {
+				whereClause += " AND COALESCE(r.deleted, FALSE)=FALSE"
+			}
+			if hasRegVersions {
+				args = append(args, time.Now().UTC())
+				validArg := len(args)
+				whereClause += fmt.Sprintf(` AND EXISTS (
+					SELECT 1
+					FROM regulation_versions rv
+					WHERE rv.tenant_id=r.tenant_id
+					  AND rv.document_id=r.id
+					  AND COALESCE(rv.effective_from, '-infinity'::timestamptz) <= $%d
+					  AND COALESCE(rv.effective_to, 'infinity'::timestamptz) >= $%d
+				)`, validArg, validArg)
+			}
+			args = append(args, drawingLimit)
+			limitArg := len(args)
+			regRows, qErr := s.db.QueryContext(ctx, `
+				SELECT r.id, COALESCE(r.doc_no, ''), COALESCE(r.title, ''), COALESCE(r.category, ''), COALESCE(r.publisher, ''),
+				       COALESCE(r.status, ''), r.updated_at
+				FROM regulation_documents r
+				WHERE `+whereClause+`
+				ORDER BY r.updated_at DESC, r.id DESC
+				LIMIT $`+strconv.Itoa(limitArg), args...)
+			if qErr != nil {
+				if !isMissingRelationErr(qErr, "regulation_documents", "regulation_versions") {
+					return nil, qErr
+				}
+			} else {
+				defer regRows.Close()
+				for regRows.Next() {
+					item := &RegulationLibraryItem{}
+					if scanErr := regRows.Scan(
+						&item.ID,
+						&item.DocNo,
+						&item.Title,
+						&item.Category,
+						&item.Publisher,
+						&item.Status,
+						&item.UpdatedAt,
+					); scanErr != nil {
+						return nil, scanErr
+					}
+					out.Regulations = append(out.Regulations, item)
+				}
+				if regRowsErr := regRows.Err(); regRowsErr != nil {
+					return nil, regRowsErr
+				}
+			}
+		}
+	}
+	if len(out.Regulations) == 0 {
+		hasRegDocs, regErr := s.hasColumn(ctx, "regulation_documents", "id")
+		if regErr != nil {
+			return nil, regErr
+		}
+		if hasRegDocs {
+			hasRegDeleted, delErr := s.hasColumn(ctx, "regulation_documents", "deleted")
+			if delErr != nil {
+				return nil, delErr
+			}
+			hasRegVersions, verErr := s.hasColumn(ctx, "regulation_versions", "id")
+			if verErr != nil {
+				return nil, verErr
+			}
+			args := []any{tenantID}
+			whereClause := "r.tenant_id=$1"
+			if hasRegDeleted {
+				whereClause += " AND COALESCE(r.deleted, FALSE)=FALSE"
+			}
+			if hasRegVersions {
+				args = append(args, time.Now().UTC())
+				validArg := len(args)
+				whereClause += fmt.Sprintf(` AND EXISTS (
+					SELECT 1
+					FROM regulation_versions rv
+					WHERE rv.tenant_id=r.tenant_id
+					  AND rv.document_id=r.id
+					  AND COALESCE(rv.effective_from, '-infinity'::timestamptz) <= $%d
+					  AND COALESCE(rv.effective_to, 'infinity'::timestamptz) >= $%d
+				)`, validArg, validArg)
+			}
+			args = append(args, drawingLimit)
+			limitArg := len(args)
+			rows, qErr := s.db.QueryContext(ctx, `
+				SELECT r.id, COALESCE(r.doc_no, ''), COALESCE(r.title, ''), COALESCE(r.category, ''), COALESCE(r.publisher, ''),
+				       COALESCE(r.status, ''), r.updated_at
+				FROM regulation_documents r
+				WHERE `+whereClause+`
+				ORDER BY r.updated_at DESC, r.id DESC
+				LIMIT $`+strconv.Itoa(limitArg), args...)
+			if qErr != nil {
+				if !isMissingRelationErr(qErr, "regulation_documents", "regulation_versions") {
+					return nil, qErr
+				}
+			} else {
+				defer rows.Close()
+				for rows.Next() {
+					item := &RegulationLibraryItem{}
+					if scanErr := rows.Scan(
+						&item.ID,
+						&item.DocNo,
+						&item.Title,
+						&item.Category,
+						&item.Publisher,
+						&item.Status,
+						&item.UpdatedAt,
+					); scanErr != nil {
+						return nil, scanErr
+					}
+					out.Regulations = append(out.Regulations, item)
+				}
+				if rowsErr := rows.Err(); rowsErr != nil {
+					return nil, rowsErr
+				}
+			}
+		}
+	}
+	out.RegulationCount = len(out.Regulations)
+
 	return out, nil
 }
 
@@ -1862,7 +3048,7 @@ func (s *PGStore) getQualificationLibraryDetail(ctx context.Context, tenantID in
 	return detail, nil
 }
 
-func (s *PGStore) getEngineeringStandardDetail(ctx context.Context, tenantID int, id int64) (*EngineeringStandardDetail, error) {
+func (s *PGStore) getEngineeringStandardDetail(ctx context.Context, tenantID int, id int64, includeHistory bool, validOn *time.Time) (*EngineeringStandardDetail, error) {
 	hasDeleted, err := s.hasColumn(ctx, "drawings", "deleted")
 	if err != nil {
 		return nil, err
@@ -1878,6 +3064,7 @@ func (s *PGStore) getEngineeringStandardDetail(ctx context.Context, tenantID int
 
 	detail := &EngineeringStandardDetail{
 		Attachments: make([]*DrawingAttachmentDetail, 0),
+		Versions:    make([]*StandardVersionDetail, 0),
 	}
 	err = s.db.QueryRowContext(ctx, `
 		SELECT d.id,
@@ -1959,10 +3146,19 @@ func (s *PGStore) getEngineeringStandardDetail(ctx context.Context, tenantID int
 		return nil, err
 	}
 
+	versions, hasVersionTable, verErr := s.listDrawingVersions(ctx, tenantID, detail.Item.DrawingNo, includeHistory, validOn, 200)
+	if verErr != nil {
+		return nil, verErr
+	}
+	if !includeHistory && hasVersionTable && len(versions) == 0 {
+		return nil, nil
+	}
+	detail.Versions = versions
+
 	return detail, nil
 }
 
-func (s *PGStore) getRegulationLibraryDetail(ctx context.Context, tenantID int, id int64) (*RegulationLibraryDetail, error) {
+func (s *PGStore) getRegulationLibraryDetail(ctx context.Context, tenantID int, id int64, includeHistory bool, validOn *time.Time) (*RegulationLibraryDetail, error) {
 	detail := &RegulationLibraryDetail{
 		Versions: make([]*RegulationVersionDetail, 0),
 	}
@@ -1994,13 +3190,27 @@ func (s *PGStore) getRegulationLibraryDetail(ctx context.Context, tenantID int, 
 		return nil, err
 	}
 
-	rows, verErr := s.db.QueryContext(ctx, `
+	versionWhere := "tenant_id=$1 AND document_id=$2"
+	verArgs := []any{tenantID, id}
+	if !includeHistory {
+		effectiveAt := time.Now().UTC()
+		if validOn != nil {
+			effectiveAt = validOn.UTC()
+		}
+		verArgs = append(verArgs, effectiveAt)
+		argIdx := len(verArgs)
+		versionWhere += fmt.Sprintf(" AND COALESCE(effective_from, '-infinity'::timestamptz) <= $%d AND COALESCE(effective_to, 'infinity'::timestamptz) >= $%d", argIdx, argIdx)
+	}
+	verSQL := `
 		SELECT id, version_no, effective_from, effective_to, published_at,
 		       COALESCE(content_hash, ''), COALESCE(attachment_url, ''), COALESCE(source_note, '')
 		FROM regulation_versions
-		WHERE tenant_id=$1 AND document_id=$2
-		ORDER BY version_no DESC, id DESC
-	`, tenantID, id)
+		WHERE ` + versionWhere + `
+		ORDER BY version_no DESC, id DESC`
+	if !includeHistory {
+		verSQL += " LIMIT 1"
+	}
+	rows, verErr := s.db.QueryContext(ctx, verSQL, verArgs...)
 	if verErr != nil {
 		if !isMissingRelationErr(verErr, "regulation_versions") {
 			return nil, verErr
@@ -2045,24 +3255,36 @@ func (s *PGStore) getRegulationLibraryDetail(ctx context.Context, tenantID int, 
 	return detail, nil
 }
 
-func (s *PGStore) listQualificationLibrary(ctx context.Context, tenantID, limit, offset int) ([]*QualificationLibraryItem, int, error) {
+func (s *PGStore) listQualificationLibrary(ctx context.Context, tenantID, limit, offset int, executorRef string) ([]*QualificationLibraryItem, int, error) {
+	executorRef = strings.TrimSpace(executorRef)
+	whereClause := "tenant_id=$1 AND deleted=FALSE"
+	countArgs := []any{tenantID}
+	if executorRef != "" {
+		whereClause += " AND COALESCE(BTRIM(executor_ref), '') = $2"
+		countArgs = append(countArgs, executorRef)
+	}
+
 	var total int
 	if err := s.db.QueryRowContext(ctx, `
 		SELECT COUNT(*)
 		FROM qualifications
-		WHERE tenant_id=$1 AND deleted=FALSE
-	`, tenantID).Scan(&total); err != nil {
+		WHERE `+whereClause+`
+	`, countArgs...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
+	listArgs := append([]any{}, countArgs...)
+	listArgs = append(listArgs, limit, offset)
+	limitArg := len(countArgs) + 1
+	offsetArg := len(countArgs) + 2
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, qual_type, holder_name, COALESCE(executor_ref, ''), status,
 		       COALESCE(TO_CHAR(valid_until,'YYYY-MM-DD'), ''), updated_at
 		FROM qualifications
-		WHERE tenant_id=$1 AND deleted=FALSE
+		WHERE `+whereClause+`
 		ORDER BY updated_at DESC, id DESC
-		LIMIT $2 OFFSET $3
-	`, tenantID, limit, offset)
+		LIMIT $`+strconv.Itoa(limitArg)+` OFFSET $`+strconv.Itoa(offsetArg)+`
+	`, listArgs...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -2087,7 +3309,8 @@ func (s *PGStore) listQualificationLibrary(ctx context.Context, tenantID, limit,
 	return items, total, rows.Err()
 }
 
-func (s *PGStore) listEngineeringStandards(ctx context.Context, tenantID, limit, offset int) ([]*EngineeringStandardItem, int, error) {
+func (s *PGStore) listEngineeringStandards(ctx context.Context, tenantID, limit, offset int, executorRef string, includeHistory bool, validOn *time.Time) ([]*EngineeringStandardItem, int, error) {
+	executorRef = strings.TrimSpace(executorRef)
 	hasDeleted, err := s.hasColumn(ctx, "drawings", "deleted")
 	if err != nil {
 		return nil, 0, err
@@ -2105,14 +3328,68 @@ func (s *PGStore) listEngineeringStandards(ctx context.Context, tenantID, limit,
 		return nil, 0, err
 	}
 
+	drawingNoExpr := "COALESCE(NULLIF(d.num,''), 'drawing-' || d.id::text)"
+	if hasDrawingNo {
+		drawingNoExpr = "COALESCE(NULLIF(d.drawing_no,''), NULLIF(d.num,''), 'drawing-' || d.id::text)"
+	}
+
 	whereClause := "d.tenant_id=$1"
 	if hasDeleted {
 		whereClause += " AND d.deleted=FALSE"
 	}
-
-	drawingNoExpr := "COALESCE(NULLIF(d.num,''), 'drawing-' || d.id::text)"
-	if hasDrawingNo {
-		drawingNoExpr = "COALESCE(NULLIF(d.drawing_no,''), NULLIF(d.num,''), 'drawing-' || d.id::text)"
+	whereArgs := []any{tenantID}
+	hasDrawingVersions, err := s.hasColumn(ctx, "drawing_versions", "id")
+	if err != nil {
+		return nil, 0, err
+	}
+	hasDrawingVersionRows := false
+	if hasDrawingVersions {
+		hasDrawingVersionRows, err = s.hasTenantRows(ctx, "drawing_versions", tenantID)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	if !includeHistory && hasDrawingVersions && hasDrawingVersionRows {
+		effectiveAt := time.Now().UTC()
+		if validOn != nil {
+			effectiveAt = validOn.UTC()
+		}
+		whereArgs = append(whereArgs, effectiveAt)
+		argIdx := len(whereArgs)
+		whereClause += fmt.Sprintf(` AND EXISTS (
+			SELECT 1
+			FROM drawing_versions dv
+			WHERE dv.tenant_id=d.tenant_id
+			  AND dv.drawing_no=`+drawingNoExpr+`
+			  AND COALESCE(dv.status, '') <> 'REVOKED'
+			  AND dv.created_at <= $%d
+		)`, argIdx)
+	}
+	if executorRef != "" {
+		hasAssignments, assignErr := s.hasColumn(ctx, "qualification_assignments", "id")
+		if assignErr != nil {
+			return nil, 0, assignErr
+		}
+		hasQualifications, qualErr := s.hasColumn(ctx, "qualifications", "id")
+		if qualErr != nil {
+			return nil, 0, qualErr
+		}
+		if !hasAssignments || !hasQualifications {
+			return make([]*EngineeringStandardItem, 0), 0, nil
+		}
+		whereArgs = append(whereArgs, executorRef)
+		execArgIdx := len(whereArgs)
+		whereClause += fmt.Sprintf(` AND EXISTS (
+			SELECT 1
+			FROM qualification_assignments a
+			JOIN qualifications q
+			  ON q.id = a.qualification_id
+			 AND q.tenant_id = a.tenant_id
+			 AND COALESCE(q.deleted, FALSE)=FALSE
+			WHERE a.tenant_id = d.tenant_id
+			  AND a.project_ref = d.project_ref
+			  AND COALESCE(BTRIM(q.executor_ref), '') = $%d
+		)`, execArgIdx)
 	}
 
 	statusExpr := "'UNKNOWN'"
@@ -2130,10 +3407,14 @@ func (s *PGStore) listEngineeringStandards(ctx context.Context, tenantID, limit,
 		SELECT COUNT(*)
 		FROM drawings d
 		WHERE `+whereClause,
-		tenantID).Scan(&total); err != nil {
+		whereArgs...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
+	listArgs := append([]any{}, whereArgs...)
+	listArgs = append(listArgs, limit, offset)
+	limitArg := len(whereArgs) + 1
+	offsetArg := len(whereArgs) + 2
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT d.id,
 		       `+drawingNoExpr+`,
@@ -2151,8 +3432,8 @@ func (s *PGStore) listEngineeringStandards(ctx context.Context, tenantID, limit,
 		) att ON TRUE
 		WHERE `+whereClause+`
 		ORDER BY d.updated_at DESC, d.id DESC
-		LIMIT $2 OFFSET $3
-	`, tenantID, limit, offset)
+		LIMIT $`+strconv.Itoa(limitArg)+` OFFSET $`+strconv.Itoa(offsetArg)+`
+	`, listArgs...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -2178,23 +3459,90 @@ func (s *PGStore) listEngineeringStandards(ctx context.Context, tenantID, limit,
 	return items, total, rows.Err()
 }
 
-func (s *PGStore) listRegulations(ctx context.Context, tenantID, limit, offset int) ([]*RegulationLibraryItem, int, error) {
+func (s *PGStore) listRegulations(ctx context.Context, tenantID, limit, offset int, executorRef string, includeHistory bool, validOn *time.Time) ([]*RegulationLibraryItem, int, error) {
+	executorRef = strings.TrimSpace(executorRef)
+	whereClause := "r.tenant_id=$1 AND r.deleted=FALSE"
+	args := []any{tenantID}
+	if executorRef != "" {
+		hasRegExecutorRef, err := s.hasColumn(ctx, "regulation_documents", "executor_ref")
+		if err != nil {
+			return nil, 0, err
+		}
+		if hasRegExecutorRef {
+			whereClause += " AND COALESCE(BTRIM(r.executor_ref), '') = $2"
+			args = append(args, executorRef)
+		} else {
+			hasRegProjectRef, colErr := s.hasColumn(ctx, "regulation_documents", "project_ref")
+			if colErr != nil {
+				return nil, 0, colErr
+			}
+			hasAssignments, assignErr := s.hasColumn(ctx, "qualification_assignments", "id")
+			if assignErr != nil {
+				return nil, 0, assignErr
+			}
+			hasQualifications, qualErr := s.hasColumn(ctx, "qualifications", "id")
+			if qualErr != nil {
+				return nil, 0, qualErr
+			}
+			if !hasRegProjectRef || !hasAssignments || !hasQualifications {
+				return make([]*RegulationLibraryItem, 0), 0, nil
+			}
+			whereClause += ` AND EXISTS (
+				SELECT 1
+				FROM qualification_assignments a
+				JOIN qualifications q
+				  ON q.id = a.qualification_id
+				 AND q.tenant_id = a.tenant_id
+				 AND COALESCE(q.deleted, FALSE)=FALSE
+				WHERE a.tenant_id = r.tenant_id
+				  AND a.project_ref = r.project_ref
+				  AND COALESCE(BTRIM(q.executor_ref), '') = $2
+			)`
+			args = append(args, executorRef)
+		}
+	}
+	if !includeHistory {
+		hasRegVersions, err := s.hasColumn(ctx, "regulation_versions", "id")
+		if err != nil {
+			return nil, 0, err
+		}
+		if hasRegVersions {
+			effectiveAt := time.Now().UTC()
+			if validOn != nil {
+				effectiveAt = validOn.UTC()
+			}
+			args = append(args, effectiveAt)
+			argIdx := len(args)
+			whereClause += fmt.Sprintf(` AND EXISTS (
+				SELECT 1
+				FROM regulation_versions rv
+				WHERE rv.tenant_id = r.tenant_id
+				  AND rv.document_id = r.id
+				  AND COALESCE(rv.effective_from, '-infinity'::timestamptz) <= $%d
+				  AND COALESCE(rv.effective_to, 'infinity'::timestamptz) >= $%d
+			)`, argIdx, argIdx)
+		}
+	}
 	var total int
 	if err := s.db.QueryRowContext(ctx, `
 		SELECT COUNT(*)
-		FROM regulation_documents
-		WHERE tenant_id=$1 AND deleted=FALSE
-	`, tenantID).Scan(&total); err != nil {
+		FROM regulation_documents r
+		WHERE `+whereClause+`
+	`, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
+	listArgs := append([]any{}, args...)
+	listArgs = append(listArgs, limit, offset)
+	limitArg := len(args) + 1
+	offsetArg := len(args) + 2
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, COALESCE(doc_no, ''), title, COALESCE(category, ''), COALESCE(publisher, ''), status, updated_at
-		FROM regulation_documents
-		WHERE tenant_id=$1 AND deleted=FALSE
+		FROM regulation_documents r
+		WHERE `+whereClause+`
 		ORDER BY updated_at DESC, id DESC
-		LIMIT $2 OFFSET $3
-	`, tenantID, limit, offset)
+		LIMIT $`+strconv.Itoa(limitArg)+` OFFSET $`+strconv.Itoa(offsetArg)+`
+	`, listArgs...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -2217,6 +3565,793 @@ func (s *PGStore) listRegulations(ctx context.Context, tenantID, limit, offset i
 		items = append(items, item)
 	}
 	return items, total, rows.Err()
+}
+
+func (s *PGStore) collectQualificationChanges(ctx context.Context, tenantID int, id int64, query LibraryChangesQuery) ([]*LibraryChangeItem, bool, error) {
+	var qualType, holderName, status, executorRef, certNo string
+	var updatedAt time.Time
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(qual_type, ''), COALESCE(holder_name, ''), COALESCE(status, ''),
+		       COALESCE(executor_ref, ''), COALESCE(cert_no, ''), updated_at
+		FROM qualifications
+		WHERE tenant_id=$1 AND id=$2 AND COALESCE(deleted, FALSE)=FALSE
+	`, tenantID, id).Scan(&qualType, &holderName, &status, &executorRef, &certNo, &updatedAt)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+
+	out := make([]*LibraryChangeItem, 0, 32)
+	summaryParts := make([]string, 0, 3)
+	if v := strings.TrimSpace(qualType); v != "" {
+		summaryParts = append(summaryParts, v)
+	}
+	if v := strings.TrimSpace(holderName); v != "" {
+		summaryParts = append(summaryParts, v)
+	}
+	if v := strings.TrimSpace(status); v != "" {
+		summaryParts = append(summaryParts, "status="+v)
+	}
+	out = append(out, &LibraryChangeItem{
+		Type:      "qualification",
+		ID:        id,
+		EventType: "qualification.updated",
+		Source:    "qualifications",
+		Summary:   strings.Join(summaryParts, " / "),
+		ChangedAt: updatedAt.UTC(),
+		Payload: map[string]any{
+			"id":           id,
+			"qual_type":    qualType,
+			"holder_name":  holderName,
+			"status":       status,
+			"executor_ref": executorRef,
+			"cert_no":      certNo,
+		},
+	})
+
+	hasAssignments, err := s.hasColumn(ctx, "qualification_assignments", "id")
+	if err != nil {
+		return nil, false, err
+	}
+	if !hasAssignments {
+		return out, true, nil
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, COALESCE(project_ref, ''), COALESCE(status, ''), updated_at, released_at
+		FROM qualification_assignments
+		WHERE tenant_id=$1 AND qualification_id=$2
+		ORDER BY updated_at DESC, id DESC
+		LIMIT 500
+	`, tenantID, id)
+	if err != nil {
+		if isMissingRelationErr(err, "qualification_assignments") {
+			return out, true, nil
+		}
+		return nil, false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			assignID   int64
+			projectRef string
+			assignStat string
+			assignAt   time.Time
+			releasedAt sql.NullTime
+		)
+		if scanErr := rows.Scan(&assignID, &projectRef, &assignStat, &assignAt, &releasedAt); scanErr != nil {
+			return nil, false, scanErr
+		}
+		eventType := "qualification.assignment.updated"
+		if strings.EqualFold(assignStat, "ACTIVE") {
+			eventType = "qualification.assignment.active"
+		}
+		if strings.EqualFold(assignStat, "RELEASED") || releasedAt.Valid {
+			eventType = "qualification.assignment.released"
+		}
+		changedAt := assignAt.UTC()
+		if releasedAt.Valid && releasedAt.Time.After(changedAt) {
+			changedAt = releasedAt.Time.UTC()
+		}
+		out = append(out, &LibraryChangeItem{
+			Type:      "qualification",
+			ID:        assignID,
+			EventType: eventType,
+			Source:    "qualification_assignments",
+			Summary:   fmt.Sprintf("project=%s / status=%s", strings.TrimSpace(projectRef), strings.TrimSpace(assignStat)),
+			ChangedAt: changedAt,
+			Payload: map[string]any{
+				"assignment_id":    assignID,
+				"qualification_id": id,
+				"project_ref":      projectRef,
+				"status":           assignStat,
+				"released_at": func() *time.Time {
+					if !releasedAt.Valid {
+						return nil
+					}
+					t := releasedAt.Time.UTC()
+					return &t
+				}(),
+			},
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	return out, true, nil
+}
+
+func (s *PGStore) collectStandardChanges(ctx context.Context, tenantID int, id int64, query LibraryChangesQuery) ([]*LibraryChangeItem, bool, error) {
+	hasDeleted, err := s.hasColumn(ctx, "drawings", "deleted")
+	if err != nil {
+		return nil, false, err
+	}
+	drawingNoExpr, statusExpr, err := s.buildDrawingDisplayExpressions(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	whereClause := "d.tenant_id=$1 AND d.id=$2"
+	if hasDeleted {
+		whereClause += " AND d.deleted=FALSE"
+	}
+
+	var (
+		drawingNo  string
+		major      string
+		status     string
+		projectRef string
+		updatedAt  time.Time
+	)
+	err = s.db.QueryRowContext(ctx, `
+		SELECT `+drawingNoExpr+`, COALESCE(d.major, ''), `+statusExpr+`, COALESCE(d.project_ref, ''), d.updated_at
+		FROM drawings d
+		WHERE `+whereClause, tenantID, id).Scan(&drawingNo, &major, &status, &projectRef, &updatedAt)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+
+	versions, hasVersionTable, verErr := s.listDrawingVersions(ctx, tenantID, drawingNo, query.IncludeHistory, query.ValidOn, 500)
+	if verErr != nil {
+		return nil, false, verErr
+	}
+	if !query.IncludeHistory && hasVersionTable && len(versions) == 0 {
+		return nil, false, nil
+	}
+
+	out := make([]*LibraryChangeItem, 0, 64)
+	out = append(out, &LibraryChangeItem{
+		Type:      "standard",
+		ID:        id,
+		EventType: "standard.updated",
+		Source:    "drawings",
+		Summary: strings.TrimSpace(strings.Join([]string{
+			strings.TrimSpace(drawingNo),
+			strings.TrimSpace(major),
+			"status=" + strings.TrimSpace(status),
+		}, " / ")),
+		ChangedAt: updatedAt.UTC(),
+		Payload: map[string]any{
+			"id":          id,
+			"drawing_no":  drawingNo,
+			"major":       major,
+			"status":      status,
+			"project_ref": projectRef,
+		},
+	})
+
+	hasAttachments, err := s.hasColumn(ctx, "drawing_attachments", "id")
+	if err != nil {
+		return nil, false, err
+	}
+	if hasAttachments {
+		rows, qErr := s.db.QueryContext(ctx, `
+			SELECT id, COALESCE(source_table, ''), COALESCE(name, ''), COALESCE(url, ''),
+			       COALESCE(version, ''), COALESCE(state, 0), approve_date, updated_at
+			FROM drawing_attachments
+			WHERE tenant_id=$1 AND drawing_id=$2
+			ORDER BY updated_at DESC, id DESC
+			LIMIT 500
+		`, tenantID, id)
+		if qErr != nil {
+			if !isMissingRelationErr(qErr, "drawing_attachments") {
+				return nil, false, qErr
+			}
+		} else {
+			defer rows.Close()
+			for rows.Next() {
+				var (
+					attID       int64
+					sourceTable string
+					name        string
+					url         string
+					version     string
+					state       int
+					approveDate sql.NullTime
+					attUpdated  time.Time
+				)
+				if scanErr := rows.Scan(&attID, &sourceTable, &name, &url, &version, &state, &approveDate, &attUpdated); scanErr != nil {
+					return nil, false, scanErr
+				}
+				changedAt := attUpdated.UTC()
+				if approveDate.Valid && approveDate.Time.After(changedAt) {
+					changedAt = approveDate.Time.UTC()
+				}
+				out = append(out, &LibraryChangeItem{
+					Type:      "standard",
+					ID:        attID,
+					EventType: "standard.attachment.updated",
+					Source:    "drawing_attachments",
+					Summary:   fmt.Sprintf("attachment=%s / version=%s / state=%d", strings.TrimSpace(name), strings.TrimSpace(version), state),
+					ChangedAt: changedAt,
+					Payload: map[string]any{
+						"attachment_id": attID,
+						"drawing_id":    id,
+						"source_table":  sourceTable,
+						"name":          name,
+						"url":           url,
+						"version":       version,
+						"state":         state,
+					},
+				})
+			}
+			if rowsErr := rows.Err(); rowsErr != nil {
+				return nil, false, rowsErr
+			}
+		}
+	}
+
+	for _, ver := range versions {
+		if ver == nil {
+			continue
+		}
+		changedAt := ver.UpdatedAt.UTC()
+		if changedAt.IsZero() {
+			changedAt = ver.CreatedAt.UTC()
+		}
+		out = append(out, &LibraryChangeItem{
+			Type:      "standard",
+			ID:        ver.ID,
+			EventType: "standard.version.updated",
+			Source:    "drawing_versions",
+			Summary:   fmt.Sprintf("v%d / status=%s", ver.VersionNo, strings.TrimSpace(ver.Status)),
+			ChangedAt: changedAt,
+			Payload: map[string]any{
+				"version_id":      ver.ID,
+				"drawing_no":      drawingNo,
+				"version_no":      ver.VersionNo,
+				"status":          ver.Status,
+				"review_cert_ref": ver.ReviewCertRef,
+				"file_hash":       ver.FileHash,
+				"proof_hash":      ver.ProofHash,
+				"publisher_ref":   ver.PublisherRef,
+			},
+		})
+	}
+	return out, true, nil
+}
+
+func (s *PGStore) collectRegulationChanges(ctx context.Context, tenantID int, id int64, query LibraryChangesQuery) ([]*LibraryChangeItem, bool, error) {
+	var docNo, title, status, category, publisher string
+	var updatedAt time.Time
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(doc_no, ''), COALESCE(title, ''), COALESCE(status, ''),
+		       COALESCE(category, ''), COALESCE(publisher, ''), updated_at
+		FROM regulation_documents
+		WHERE tenant_id=$1 AND id=$2 AND COALESCE(deleted, FALSE)=FALSE
+	`, tenantID, id).Scan(&docNo, &title, &status, &category, &publisher, &updatedAt)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+
+	out := make([]*LibraryChangeItem, 0, 48)
+	out = append(out, &LibraryChangeItem{
+		Type:      "regulation",
+		ID:        id,
+		EventType: "regulation.updated",
+		Source:    "regulation_documents",
+		Summary: strings.TrimSpace(strings.Join([]string{
+			strings.TrimSpace(title),
+			strings.TrimSpace(docNo),
+			"status=" + strings.TrimSpace(status),
+		}, " / ")),
+		ChangedAt: updatedAt.UTC(),
+		Payload: map[string]any{
+			"id":        id,
+			"doc_no":    docNo,
+			"title":     title,
+			"status":    status,
+			"category":  category,
+			"publisher": publisher,
+		},
+	})
+
+	hasVersions, err := s.hasColumn(ctx, "regulation_versions", "id")
+	if err != nil {
+		return nil, false, err
+	}
+	if !hasVersions {
+		return out, true, nil
+	}
+
+	whereClause := "tenant_id=$1 AND document_id=$2"
+	args := []any{tenantID, id}
+	limit := 500
+	if !query.IncludeHistory {
+		effectiveAt := time.Now().UTC()
+		if query.ValidOn != nil {
+			effectiveAt = query.ValidOn.UTC()
+		}
+		args = append(args, effectiveAt)
+		argIdx := len(args)
+		whereClause += fmt.Sprintf(" AND COALESCE(effective_from, '-infinity'::timestamptz) <= $%d AND COALESCE(effective_to, 'infinity'::timestamptz) >= $%d", argIdx, argIdx)
+		limit = 1
+	}
+	args = append(args, limit)
+	limitArg := len(args)
+	rows, qErr := s.db.QueryContext(ctx, `
+		SELECT id, version_no, effective_from, effective_to, published_at,
+		       COALESCE(content_hash, ''), COALESCE(attachment_url, ''), COALESCE(source_note, ''), updated_at
+		FROM regulation_versions
+		WHERE `+whereClause+`
+		ORDER BY version_no DESC, id DESC
+		LIMIT $`+strconv.Itoa(limitArg), args...)
+	if qErr != nil {
+		if isMissingRelationErr(qErr, "regulation_versions") {
+			return out, true, nil
+		}
+		return nil, false, qErr
+	}
+	defer rows.Close()
+
+	versionCount := 0
+	for rows.Next() {
+		var (
+			versionID     int64
+			versionNo     int
+			effectiveFrom sql.NullTime
+			effectiveTo   sql.NullTime
+			publishedAt   sql.NullTime
+			contentHash   string
+			attachmentURL string
+			sourceNote    string
+			versionAt     time.Time
+		)
+		if scanErr := rows.Scan(
+			&versionID,
+			&versionNo,
+			&effectiveFrom,
+			&effectiveTo,
+			&publishedAt,
+			&contentHash,
+			&attachmentURL,
+			&sourceNote,
+			&versionAt,
+		); scanErr != nil {
+			return nil, false, scanErr
+		}
+		changedAt := versionAt.UTC()
+		if publishedAt.Valid && publishedAt.Time.After(changedAt) {
+			changedAt = publishedAt.Time.UTC()
+		}
+		out = append(out, &LibraryChangeItem{
+			Type:      "regulation",
+			ID:        versionID,
+			EventType: "regulation.version.updated",
+			Source:    "regulation_versions",
+			Summary:   fmt.Sprintf("v%d / %s", versionNo, strings.TrimSpace(sourceNote)),
+			ChangedAt: changedAt,
+			Payload: map[string]any{
+				"version_id":  versionID,
+				"document_id": id,
+				"version_no":  versionNo,
+				"effective_from": func() *time.Time {
+					if !effectiveFrom.Valid {
+						return nil
+					}
+					t := effectiveFrom.Time.UTC()
+					return &t
+				}(),
+				"effective_to": func() *time.Time {
+					if !effectiveTo.Valid {
+						return nil
+					}
+					t := effectiveTo.Time.UTC()
+					return &t
+				}(),
+				"published_at": func() *time.Time {
+					if !publishedAt.Valid {
+						return nil
+					}
+					t := publishedAt.Time.UTC()
+					return &t
+				}(),
+				"content_hash":   contentHash,
+				"attachment_url": attachmentURL,
+				"source_note":    sourceNote,
+			},
+		})
+		versionCount++
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, false, rowsErr
+	}
+	if !query.IncludeHistory && hasVersions && versionCount == 0 {
+		return nil, false, nil
+	}
+	return out, true, nil
+}
+
+func (s *PGStore) getStandardVersionDiff(
+	ctx context.Context,
+	tenantID int,
+	libraryID int64,
+	fromVersionID int64,
+	toVersionID int64,
+) (*LibraryVersionDiffVersion, *LibraryVersionDiffVersion, bool, error) {
+	hasDrawings, err := s.hasColumn(ctx, "drawings", "id")
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if !hasDrawings {
+		return nil, nil, false, nil
+	}
+	hasDeleted, err := s.hasColumn(ctx, "drawings", "deleted")
+	if err != nil {
+		return nil, nil, false, err
+	}
+	drawingNoExpr, _, err := s.buildDrawingDisplayExpressions(ctx)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	whereClause := "tenant_id=$1 AND id=$2"
+	if hasDeleted {
+		whereClause += " AND deleted=FALSE"
+	}
+	var drawingNo string
+	err = s.db.QueryRowContext(ctx, `
+		SELECT `+drawingNoExpr+`
+		FROM drawings d
+		WHERE `+strings.ReplaceAll(whereClause, "tenant_id", "d.tenant_id"), tenantID, libraryID).Scan(&drawingNo)
+	if err == sql.ErrNoRows {
+		return nil, nil, false, nil
+	}
+	if err != nil {
+		return nil, nil, false, err
+	}
+	drawingNo = strings.TrimSpace(drawingNo)
+	if drawingNo == "" {
+		return nil, nil, false, nil
+	}
+
+	hasVersions, err := s.hasColumn(ctx, "drawing_versions", "id")
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if !hasVersions {
+		return nil, nil, false, nil
+	}
+
+	loadOne := func(versionID int64) (*LibraryVersionDiffVersion, error) {
+		item := &LibraryVersionDiffVersion{Data: make(map[string]any)}
+		var (
+			status        string
+			reviewCertRef string
+			fileHash      string
+			proofHash     string
+			publisherRef  string
+			createdAt     time.Time
+			updatedAt     time.Time
+		)
+		err := s.db.QueryRowContext(ctx, `
+			SELECT id, version_no, COALESCE(status, ''), COALESCE(review_cert_ref, ''), COALESCE(file_hash, ''),
+			       COALESCE(proof_hash, ''), COALESCE(publisher_ref, ''), created_at, updated_at
+			FROM drawing_versions
+			WHERE tenant_id=$1 AND drawing_no=$2 AND id=$3
+			LIMIT 1
+		`, tenantID, drawingNo, versionID).Scan(
+			&item.ID,
+			&item.VersionNo,
+			&status,
+			&reviewCertRef,
+			&fileHash,
+			&proofHash,
+			&publisherRef,
+			&createdAt,
+			&updatedAt,
+		)
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		item.ChangedAt = updatedAt.UTC()
+		item.Data["status"] = status
+		item.Data["review_cert_ref"] = reviewCertRef
+		item.Data["file_hash"] = fileHash
+		item.Data["proof_hash"] = proofHash
+		item.Data["publisher_ref"] = publisherRef
+		item.Data["created_at"] = createdAt.UTC().Format(time.RFC3339)
+		item.Data["updated_at"] = updatedAt.UTC().Format(time.RFC3339)
+		return item, nil
+	}
+
+	if toVersionID > 0 {
+		toVersion, toErr := loadOne(toVersionID)
+		if toErr != nil {
+			return nil, nil, false, toErr
+		}
+		if toVersion == nil {
+			return nil, nil, false, nil
+		}
+		var fromVersion *LibraryVersionDiffVersion
+		if fromVersionID > 0 {
+			fromVersion, toErr = loadOne(fromVersionID)
+			if toErr != nil {
+				return nil, nil, false, toErr
+			}
+			if fromVersion == nil {
+				return nil, nil, false, nil
+			}
+		}
+		return fromVersion, toVersion, true, nil
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, version_no, COALESCE(status, ''), COALESCE(review_cert_ref, ''), COALESCE(file_hash, ''),
+		       COALESCE(proof_hash, ''), COALESCE(publisher_ref, ''), created_at, updated_at
+		FROM drawing_versions
+		WHERE tenant_id=$1 AND drawing_no=$2
+		ORDER BY version_no DESC, id DESC
+		LIMIT 2
+	`, tenantID, drawingNo)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	defer rows.Close()
+
+	versions := make([]*LibraryVersionDiffVersion, 0, 2)
+	for rows.Next() {
+		item := &LibraryVersionDiffVersion{Data: make(map[string]any)}
+		var (
+			status        string
+			reviewCertRef string
+			fileHash      string
+			proofHash     string
+			publisherRef  string
+			createdAt     time.Time
+			updatedAt     time.Time
+		)
+		if scanErr := rows.Scan(
+			&item.ID,
+			&item.VersionNo,
+			&status,
+			&reviewCertRef,
+			&fileHash,
+			&proofHash,
+			&publisherRef,
+			&createdAt,
+			&updatedAt,
+		); scanErr != nil {
+			return nil, nil, false, scanErr
+		}
+		item.ChangedAt = updatedAt.UTC()
+		item.Data["status"] = status
+		item.Data["review_cert_ref"] = reviewCertRef
+		item.Data["file_hash"] = fileHash
+		item.Data["proof_hash"] = proofHash
+		item.Data["publisher_ref"] = publisherRef
+		item.Data["created_at"] = createdAt.UTC().Format(time.RFC3339)
+		item.Data["updated_at"] = updatedAt.UTC().Format(time.RFC3339)
+		versions = append(versions, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, false, err
+	}
+	if len(versions) == 0 {
+		return nil, nil, false, nil
+	}
+	if len(versions) == 1 {
+		return nil, versions[0], true, nil
+	}
+	return versions[1], versions[0], true, nil
+}
+
+func (s *PGStore) getRegulationVersionDiff(
+	ctx context.Context,
+	tenantID int,
+	libraryID int64,
+	fromVersionID int64,
+	toVersionID int64,
+) (*LibraryVersionDiffVersion, *LibraryVersionDiffVersion, bool, error) {
+	hasRegDocs, err := s.hasColumn(ctx, "regulation_documents", "id")
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if !hasRegDocs {
+		return nil, nil, false, nil
+	}
+	var docExists bool
+	err = s.db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM regulation_documents
+			WHERE tenant_id=$1 AND id=$2 AND COALESCE(deleted, FALSE)=FALSE
+		)
+	`, tenantID, libraryID).Scan(&docExists)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if !docExists {
+		return nil, nil, false, nil
+	}
+
+	hasVersions, err := s.hasColumn(ctx, "regulation_versions", "id")
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if !hasVersions {
+		return nil, nil, false, nil
+	}
+
+	loadOne := func(versionID int64) (*LibraryVersionDiffVersion, error) {
+		item := &LibraryVersionDiffVersion{Data: make(map[string]any)}
+		var (
+			effectiveFrom sql.NullTime
+			effectiveTo   sql.NullTime
+			publishedAt   sql.NullTime
+			contentHash   string
+			attachmentURL string
+			sourceNote    string
+			updatedAt     time.Time
+		)
+		err := s.db.QueryRowContext(ctx, `
+			SELECT id, version_no, effective_from, effective_to, published_at,
+			       COALESCE(content_hash, ''), COALESCE(attachment_url, ''), COALESCE(source_note, ''), updated_at
+			FROM regulation_versions
+			WHERE tenant_id=$1 AND document_id=$2 AND id=$3
+			LIMIT 1
+		`, tenantID, libraryID, versionID).Scan(
+			&item.ID,
+			&item.VersionNo,
+			&effectiveFrom,
+			&effectiveTo,
+			&publishedAt,
+			&contentHash,
+			&attachmentURL,
+			&sourceNote,
+			&updatedAt,
+		)
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		item.ChangedAt = updatedAt.UTC()
+		item.Data["effective_from"] = formatNullTimeRFC3339(effectiveFrom)
+		item.Data["effective_to"] = formatNullTimeRFC3339(effectiveTo)
+		item.Data["published_at"] = formatNullTimeRFC3339(publishedAt)
+		item.Data["content_hash"] = contentHash
+		item.Data["attachment_url"] = attachmentURL
+		item.Data["source_note"] = sourceNote
+		item.Data["updated_at"] = updatedAt.UTC().Format(time.RFC3339)
+		return item, nil
+	}
+
+	if toVersionID > 0 {
+		toVersion, toErr := loadOne(toVersionID)
+		if toErr != nil {
+			return nil, nil, false, toErr
+		}
+		if toVersion == nil {
+			return nil, nil, false, nil
+		}
+		var fromVersion *LibraryVersionDiffVersion
+		if fromVersionID > 0 {
+			fromVersion, toErr = loadOne(fromVersionID)
+			if toErr != nil {
+				return nil, nil, false, toErr
+			}
+			if fromVersion == nil {
+				return nil, nil, false, nil
+			}
+		}
+		return fromVersion, toVersion, true, nil
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, version_no, effective_from, effective_to, published_at,
+		       COALESCE(content_hash, ''), COALESCE(attachment_url, ''), COALESCE(source_note, ''), updated_at
+		FROM regulation_versions
+		WHERE tenant_id=$1 AND document_id=$2
+		ORDER BY version_no DESC, id DESC
+		LIMIT 2
+	`, tenantID, libraryID)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	defer rows.Close()
+
+	versions := make([]*LibraryVersionDiffVersion, 0, 2)
+	for rows.Next() {
+		item := &LibraryVersionDiffVersion{Data: make(map[string]any)}
+		var (
+			effectiveFrom sql.NullTime
+			effectiveTo   sql.NullTime
+			publishedAt   sql.NullTime
+			contentHash   string
+			attachmentURL string
+			sourceNote    string
+			updatedAt     time.Time
+		)
+		if scanErr := rows.Scan(
+			&item.ID,
+			&item.VersionNo,
+			&effectiveFrom,
+			&effectiveTo,
+			&publishedAt,
+			&contentHash,
+			&attachmentURL,
+			&sourceNote,
+			&updatedAt,
+		); scanErr != nil {
+			return nil, nil, false, scanErr
+		}
+		item.ChangedAt = updatedAt.UTC()
+		item.Data["effective_from"] = formatNullTimeRFC3339(effectiveFrom)
+		item.Data["effective_to"] = formatNullTimeRFC3339(effectiveTo)
+		item.Data["published_at"] = formatNullTimeRFC3339(publishedAt)
+		item.Data["content_hash"] = contentHash
+		item.Data["attachment_url"] = attachmentURL
+		item.Data["source_note"] = sourceNote
+		item.Data["updated_at"] = updatedAt.UTC().Format(time.RFC3339)
+		versions = append(versions, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, false, err
+	}
+	if len(versions) == 0 {
+		return nil, nil, false, nil
+	}
+	if len(versions) == 1 {
+		return nil, versions[0], true, nil
+	}
+	return versions[1], versions[0], true, nil
+}
+
+func formatNullTimeRFC3339(v sql.NullTime) string {
+	if !v.Valid {
+		return ""
+	}
+	return v.Time.UTC().Format(time.RFC3339)
+}
+
+func diffChangedFields(fromData map[string]any, toData map[string]any) []string {
+	changed := make([]string, 0, 16)
+	keys := make(map[string]struct{}, len(fromData)+len(toData))
+	for key := range fromData {
+		keys[key] = struct{}{}
+	}
+	for key := range toData {
+		keys[key] = struct{}{}
+	}
+	for key := range keys {
+		if !reflect.DeepEqual(fromData[key], toData[key]) {
+			changed = append(changed, key)
+		}
+	}
+	sort.Strings(changed)
+	return changed
 }
 
 type relationGraphBuilder struct {
@@ -2400,6 +4535,238 @@ func (s *PGStore) appendProjectDrawingRelations(ctx context.Context, tenantID in
 	return rows.Err()
 }
 
+func (s *PGStore) appendProjectRegulationRelations(
+	ctx context.Context,
+	tenantID int,
+	builder *relationGraphBuilder,
+	projectRefs []string,
+	includeHistory bool,
+	validOn *time.Time,
+	limit int,
+) error {
+	if builder == nil || len(projectRefs) == 0 {
+		return nil
+	}
+	hasRegDocs, err := s.hasColumn(ctx, "regulation_documents", "id")
+	if err != nil {
+		return err
+	}
+	if !hasRegDocs {
+		return nil
+	}
+	hasRegProjectRef, err := s.hasColumn(ctx, "regulation_documents", "project_ref")
+	if err != nil {
+		return err
+	}
+	hasRegDeleted, err := s.hasColumn(ctx, "regulation_documents", "deleted")
+	if err != nil {
+		return err
+	}
+	hasRegVersions, err := s.hasColumn(ctx, "regulation_versions", "id")
+	if err != nil {
+		return err
+	}
+
+	seen := make(map[string]struct{}, len(projectRefs))
+	dedupProjectRefs := make([]string, 0, len(projectRefs))
+	for _, projectRef := range projectRefs {
+		projectRef = strings.TrimSpace(projectRef)
+		if projectRef == "" {
+			continue
+		}
+		if _, ok := seen[projectRef]; ok {
+			continue
+		}
+		seen[projectRef] = struct{}{}
+		dedupProjectRefs = append(dedupProjectRefs, projectRef)
+	}
+	if len(dedupProjectRefs) == 0 {
+		return nil
+	}
+
+	limit = normalizePageLimit(limit)
+	appliedCount := 0
+	if hasRegProjectRef {
+		args := make([]any, 0, len(dedupProjectRefs)+3)
+		args = append(args, tenantID)
+		holders := make([]string, 0, len(dedupProjectRefs))
+		for i, projectRef := range dedupProjectRefs {
+			args = append(args, projectRef)
+			holders = append(holders, fmt.Sprintf("$%d", i+2))
+		}
+
+		whereClause := "r.tenant_id=$1 AND r.project_ref IN (" + strings.Join(holders, ",") + ")"
+		if hasRegDeleted {
+			whereClause += " AND COALESCE(r.deleted, FALSE)=FALSE"
+		}
+		if !includeHistory && hasRegVersions {
+			effectiveAt := time.Now().UTC()
+			if validOn != nil {
+				effectiveAt = validOn.UTC()
+			}
+			args = append(args, effectiveAt)
+			argIdx := len(args)
+			whereClause += fmt.Sprintf(` AND EXISTS (
+				SELECT 1
+				FROM regulation_versions rv
+				WHERE rv.tenant_id=r.tenant_id
+				  AND rv.document_id=r.id
+				  AND COALESCE(rv.effective_from, '-infinity'::timestamptz) <= $%d
+				  AND COALESCE(rv.effective_to, 'infinity'::timestamptz) >= $%d
+			)`, argIdx, argIdx)
+		}
+		args = append(args, limit)
+		limitArg := fmt.Sprintf("$%d", len(args))
+
+		rows, qErr := s.db.QueryContext(ctx, `
+			SELECT COALESCE(r.project_ref, ''), r.id, COALESCE(r.title, ''), COALESCE(r.doc_no, ''), COALESCE(r.status, '')
+			FROM regulation_documents r
+			WHERE `+whereClause+`
+			ORDER BY r.updated_at DESC, r.id DESC
+			LIMIT `+limitArg, args...)
+		if qErr != nil {
+			return qErr
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var (
+				projectRef string
+				regID      int64
+				title      string
+				docNo      string
+				status     string
+			)
+			if scanErr := rows.Scan(&projectRef, &regID, &title, &docNo, &status); scanErr != nil {
+				return scanErr
+			}
+			projectRef = strings.TrimSpace(projectRef)
+			if projectRef == "" {
+				continue
+			}
+			projectNodeRef := "project:" + projectRef
+			builder.addNode(&LibraryRelationNode{
+				NodeRef:  projectNodeRef,
+				NodeType: "project",
+				Ref:      projectRef,
+				Label:    s.projectLabelByRef(ctx, tenantID, projectRef),
+			})
+			regNodeRef := fmt.Sprintf("regulation:%d", regID)
+			label := strings.TrimSpace(title)
+			if label == "" {
+				label = fmt.Sprintf("regulation-%d", regID)
+			}
+			if v := strings.TrimSpace(docNo); v != "" {
+				label += " / " + v
+			}
+			builder.addNode(&LibraryRelationNode{
+				NodeRef:     regNodeRef,
+				NodeType:    "regulation",
+				LibraryType: "regulation",
+				ID:          regID,
+				Label:       label,
+				Status:      strings.TrimSpace(status),
+				Ref:         projectRef,
+			})
+			builder.addEdge(projectNodeRef, regNodeRef, "applies_regulation")
+			appliedCount++
+		}
+		if rowsErr := rows.Err(); rowsErr != nil {
+			return rowsErr
+		}
+	}
+
+	if appliedCount > 0 {
+		return nil
+	}
+
+	fallbackLimit := limit
+	if fallbackLimit > 10 {
+		fallbackLimit = 10
+	}
+	if fallbackLimit <= 0 {
+		fallbackLimit = 5
+	}
+	fallbackArgs := []any{tenantID}
+	fallbackWhere := "r.tenant_id=$1"
+	if hasRegDeleted {
+		fallbackWhere += " AND COALESCE(r.deleted, FALSE)=FALSE"
+	}
+	if !includeHistory && hasRegVersions {
+		effectiveAt := time.Now().UTC()
+		if validOn != nil {
+			effectiveAt = validOn.UTC()
+		}
+		fallbackArgs = append(fallbackArgs, effectiveAt)
+		argIdx := len(fallbackArgs)
+		fallbackWhere += fmt.Sprintf(` AND EXISTS (
+			SELECT 1
+			FROM regulation_versions rv
+			WHERE rv.tenant_id=r.tenant_id
+			  AND rv.document_id=r.id
+			  AND COALESCE(rv.effective_from, '-infinity'::timestamptz) <= $%d
+			  AND COALESCE(rv.effective_to, 'infinity'::timestamptz) >= $%d
+		)`, argIdx, argIdx)
+	}
+	fallbackArgs = append(fallbackArgs, fallbackLimit)
+	fallbackLimitArg := len(fallbackArgs)
+	rows, qErr := s.db.QueryContext(ctx, `
+		SELECT r.id, COALESCE(r.title, ''), COALESCE(r.doc_no, ''), COALESCE(r.status, '')
+		FROM regulation_documents r
+		WHERE `+fallbackWhere+`
+		ORDER BY r.updated_at DESC, r.id DESC
+		LIMIT $`+strconv.Itoa(fallbackLimitArg), fallbackArgs...)
+	if qErr != nil {
+		return qErr
+	}
+	defer rows.Close()
+
+	fallbackRegs := make([]*RegulationLibraryItem, 0, fallbackLimit)
+	for rows.Next() {
+		item := &RegulationLibraryItem{}
+		if scanErr := rows.Scan(&item.ID, &item.Title, &item.DocNo, &item.Status); scanErr != nil {
+			return scanErr
+		}
+		fallbackRegs = append(fallbackRegs, item)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return rowsErr
+	}
+	for _, projectRef := range dedupProjectRefs {
+		projectNodeRef := "project:" + projectRef
+		builder.addNode(&LibraryRelationNode{
+			NodeRef:  projectNodeRef,
+			NodeType: "project",
+			Ref:      projectRef,
+			Label:    s.projectLabelByRef(ctx, tenantID, projectRef),
+		})
+		for _, reg := range fallbackRegs {
+			if reg == nil {
+				continue
+			}
+			regNodeRef := fmt.Sprintf("regulation:%d", reg.ID)
+			label := strings.TrimSpace(reg.Title)
+			if label == "" {
+				label = fmt.Sprintf("regulation-%d", reg.ID)
+			}
+			if no := strings.TrimSpace(reg.DocNo); no != "" {
+				label += " / " + no
+			}
+			builder.addNode(&LibraryRelationNode{
+				NodeRef:     regNodeRef,
+				NodeType:    "regulation",
+				LibraryType: "regulation",
+				ID:          reg.ID,
+				Label:       label,
+				Status:      strings.TrimSpace(reg.Status),
+				Ref:         projectRef,
+			})
+			builder.addEdge(projectNodeRef, regNodeRef, "references_regulation")
+		}
+	}
+	return nil
+}
+
 func (s *PGStore) projectLabelByRef(ctx context.Context, tenantID int, projectRef string) string {
 	projectRef = strings.TrimSpace(projectRef)
 	if projectRef == "" {
@@ -2442,6 +4809,248 @@ func (s *PGStore) executorLabelByRef(ctx context.Context, tenantID int, executor
 	return executorRef
 }
 
+func (s *PGStore) listDrawingVersions(
+	ctx context.Context,
+	tenantID int,
+	drawingNo string,
+	includeHistory bool,
+	validOn *time.Time,
+	limit int,
+) ([]*StandardVersionDetail, bool, error) {
+	drawingNo = strings.TrimSpace(drawingNo)
+	out := make([]*StandardVersionDetail, 0)
+	hasVersions, err := s.hasColumn(ctx, "drawing_versions", "id")
+	if err != nil {
+		return nil, false, err
+	}
+	if !hasVersions {
+		return out, false, nil
+	}
+	hasVersionRows, err := s.hasTenantRows(ctx, "drawing_versions", tenantID)
+	if err != nil {
+		return nil, false, err
+	}
+	if !hasVersionRows {
+		return out, false, nil
+	}
+	if drawingNo == "" {
+		return out, true, nil
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+
+	whereClause := "tenant_id=$1 AND drawing_no=$2"
+	args := []any{tenantID, drawingNo}
+	if !includeHistory {
+		effectiveAt := time.Now().UTC()
+		if validOn != nil {
+			effectiveAt = validOn.UTC()
+		}
+		args = append(args, effectiveAt)
+		idx := len(args)
+		whereClause += fmt.Sprintf(" AND COALESCE(status, '') <> 'REVOKED' AND created_at <= $%d", idx)
+	}
+
+	sqlText := `
+		SELECT id, version_no, COALESCE(status, ''), COALESCE(review_cert_ref, ''),
+		       COALESCE(file_hash, ''), COALESCE(proof_hash, ''), COALESCE(publisher_ref, ''),
+		       created_at, updated_at
+		FROM drawing_versions
+		WHERE ` + whereClause + `
+		ORDER BY version_no DESC, id DESC`
+	if includeHistory {
+		args = append(args, limit)
+		sqlText += fmt.Sprintf(" LIMIT $%d", len(args))
+	} else {
+		sqlText += " LIMIT 1"
+	}
+
+	rows, err := s.db.QueryContext(ctx, sqlText, args...)
+	if err != nil {
+		return nil, true, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		item := &StandardVersionDetail{}
+		if scanErr := rows.Scan(
+			&item.ID,
+			&item.VersionNo,
+			&item.Status,
+			&item.ReviewCertRef,
+			&item.FileHash,
+			&item.ProofHash,
+			&item.PublisherRef,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+		); scanErr != nil {
+			return nil, true, scanErr
+		}
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, true, err
+	}
+	return out, true, nil
+}
+
+func (s *PGStore) isLibraryVisibleToExecutor(ctx context.Context, tenantID int, libraryType string, id int64, executorRef string, includeHistory bool, validOn *time.Time) (bool, error) {
+	executorRef = strings.TrimSpace(executorRef)
+	if id <= 0 || executorRef == "" {
+		return false, nil
+	}
+
+	switch normalizeLibraryType(libraryType) {
+	case "qualification":
+		var exists bool
+		err := s.db.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM qualifications q
+				WHERE q.tenant_id=$1
+				  AND q.id=$2
+				  AND COALESCE(q.deleted, FALSE)=FALSE
+				  AND COALESCE(BTRIM(q.executor_ref), '')=$3
+			)
+		`, tenantID, id, executorRef).Scan(&exists)
+		return exists, err
+	case "standard":
+		hasAssignments, err := s.hasColumn(ctx, "qualification_assignments", "id")
+		if err != nil {
+			return false, err
+		}
+		hasQualifications, err := s.hasColumn(ctx, "qualifications", "id")
+		if err != nil {
+			return false, err
+		}
+		if !hasAssignments || !hasQualifications {
+			return false, nil
+		}
+		hasDeleted, err := s.hasColumn(ctx, "drawings", "deleted")
+		if err != nil {
+			return false, err
+		}
+		whereClause := "d.tenant_id=$1 AND d.id=$2"
+		if hasDeleted {
+			whereClause += " AND d.deleted=FALSE"
+		}
+		var exists bool
+		err = s.db.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM drawings d
+				WHERE `+whereClause+`
+				  AND EXISTS (
+					SELECT 1
+					FROM qualification_assignments a
+					JOIN qualifications q
+					  ON q.id=a.qualification_id
+					 AND q.tenant_id=a.tenant_id
+					 AND COALESCE(q.deleted, FALSE)=FALSE
+					WHERE a.tenant_id=d.tenant_id
+					  AND a.project_ref=d.project_ref
+					  AND COALESCE(BTRIM(q.executor_ref), '')=$3
+				  )
+			)
+		`, tenantID, id, executorRef).Scan(&exists)
+		return exists, err
+	case "regulation":
+		hasRegExecutorRef, err := s.hasColumn(ctx, "regulation_documents", "executor_ref")
+		if err != nil {
+			return false, err
+		}
+		if hasRegExecutorRef {
+			var exists bool
+			err = s.db.QueryRowContext(ctx, `
+				SELECT EXISTS (
+					SELECT 1
+					FROM regulation_documents r
+					WHERE r.tenant_id=$1
+					  AND r.id=$2
+					  AND COALESCE(r.deleted, FALSE)=FALSE
+					  AND COALESCE(BTRIM(r.executor_ref), '')=$3
+				)
+			`, tenantID, id, executorRef).Scan(&exists)
+			if err != nil || !exists || includeHistory {
+				return exists, err
+			}
+			return s.regulationIsEffectiveOn(ctx, tenantID, id, validOn)
+		}
+
+		hasRegProjectRef, err := s.hasColumn(ctx, "regulation_documents", "project_ref")
+		if err != nil {
+			return false, err
+		}
+		hasAssignments, err := s.hasColumn(ctx, "qualification_assignments", "id")
+		if err != nil {
+			return false, err
+		}
+		hasQualifications, err := s.hasColumn(ctx, "qualifications", "id")
+		if err != nil {
+			return false, err
+		}
+		if !hasRegProjectRef || !hasAssignments || !hasQualifications {
+			return false, nil
+		}
+		var exists bool
+		err = s.db.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM regulation_documents r
+				WHERE r.tenant_id=$1
+				  AND r.id=$2
+				  AND COALESCE(r.deleted, FALSE)=FALSE
+				  AND EXISTS (
+					SELECT 1
+					FROM qualification_assignments a
+					JOIN qualifications q
+					  ON q.id=a.qualification_id
+					 AND q.tenant_id=a.tenant_id
+					 AND COALESCE(q.deleted, FALSE)=FALSE
+					WHERE a.tenant_id=r.tenant_id
+					  AND a.project_ref=r.project_ref
+					  AND COALESCE(BTRIM(q.executor_ref), '')=$3
+				  )
+			)
+		`, tenantID, id, executorRef).Scan(&exists)
+		if err != nil || !exists || includeHistory {
+			return exists, err
+		}
+		return s.regulationIsEffectiveOn(ctx, tenantID, id, validOn)
+	default:
+		return false, fmt.Errorf("unsupported library type: %s", libraryType)
+	}
+}
+
+func (s *PGStore) regulationIsEffectiveOn(ctx context.Context, tenantID int, documentID int64, validOn *time.Time) (bool, error) {
+	if documentID <= 0 {
+		return false, nil
+	}
+	hasVersions, err := s.hasColumn(ctx, "regulation_versions", "id")
+	if err != nil {
+		return false, err
+	}
+	if !hasVersions {
+		return true, nil
+	}
+	effectiveAt := time.Now().UTC()
+	if validOn != nil {
+		effectiveAt = validOn.UTC()
+	}
+	var exists bool
+	err = s.db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM regulation_versions rv
+			WHERE rv.tenant_id=$1
+			  AND rv.document_id=$2
+			  AND COALESCE(rv.effective_from, '-infinity'::timestamptz) <= $3
+			  AND COALESCE(rv.effective_to, 'infinity'::timestamptz) >= $3
+		)
+	`, tenantID, documentID, effectiveAt).Scan(&exists)
+	return exists, err
+}
+
 func normalizeThreeLibrariesQuery(q ThreeLibrariesQuery) ThreeLibrariesQuery {
 	q.QualificationLimit = normalizePageLimit(q.QualificationLimit)
 	q.StandardLimit = normalizePageLimit(q.StandardLimit)
@@ -2449,6 +5058,11 @@ func normalizeThreeLibrariesQuery(q ThreeLibrariesQuery) ThreeLibrariesQuery {
 	q.QualificationOffset = normalizePageOffset(q.QualificationOffset)
 	q.StandardOffset = normalizePageOffset(q.StandardOffset)
 	q.RegulationOffset = normalizePageOffset(q.RegulationOffset)
+	q.ExecutorRef = strings.TrimSpace(q.ExecutorRef)
+	if q.ValidOn != nil {
+		t := q.ValidOn.UTC()
+		q.ValidOn = &t
+	}
 	return q
 }
 
@@ -2458,11 +5072,47 @@ func normalizeLibrarySearchQuery(q LibrarySearchQuery) LibrarySearchQuery {
 	q.Keyword = strings.TrimSpace(q.Keyword)
 	q.Type = normalizeLibraryType(q.Type)
 	q.Status = strings.TrimSpace(q.Status)
+	q.ExecutorRef = strings.TrimSpace(q.ExecutorRef)
+	if q.ValidOn != nil {
+		t := q.ValidOn.UTC()
+		q.ValidOn = &t
+	}
+	return q
+}
+
+func normalizeLibraryChangesQuery(q LibraryChangesQuery) LibraryChangesQuery {
+	q.Limit = normalizePageLimit(q.Limit)
+	q.Offset = normalizePageOffset(q.Offset)
+	q.ExecutorRef = strings.TrimSpace(q.ExecutorRef)
+	if q.ValidOn != nil {
+		t := q.ValidOn.UTC()
+		q.ValidOn = &t
+	}
+	if q.From != nil {
+		t := q.From.UTC()
+		q.From = &t
+	}
+	if q.To != nil {
+		t := q.To.UTC()
+		q.To = &t
+	}
+	return q
+}
+
+func normalizeLibraryVersionDiffQuery(q LibraryVersionDiffQuery) LibraryVersionDiffQuery {
+	q.FromVersionID = normalizePositiveInt64(q.FromVersionID)
+	q.ToVersionID = normalizePositiveInt64(q.ToVersionID)
+	q.ExecutorRef = strings.TrimSpace(q.ExecutorRef)
 	return q
 }
 
 func normalizeLibraryRelationsQuery(q LibraryRelationsQuery) LibraryRelationsQuery {
 	q.Limit = normalizePageLimit(q.Limit)
+	q.ExecutorRef = strings.TrimSpace(q.ExecutorRef)
+	if q.ValidOn != nil {
+		t := q.ValidOn.UTC()
+		q.ValidOn = &t
+	}
 	return q
 }
 
@@ -2520,6 +5170,13 @@ func normalizePageLimit(raw int) int {
 	return raw
 }
 
+func normalizePositiveInt64(raw int64) int64 {
+	if raw <= 0 {
+		return 0
+	}
+	return raw
+}
+
 func normalizePageOffset(raw int) int {
 	if raw < 0 {
 		return 0
@@ -2541,6 +5198,25 @@ func isMissingRelationErr(err error, tableNames ...string) bool {
 		}
 	}
 	return false
+}
+
+func (s *PGStore) hasTenantRows(ctx context.Context, tableName string, tenantID int) (bool, error) {
+	table := strings.TrimSpace(tableName)
+	switch table {
+	case "drawing_versions", "regulation_versions":
+	default:
+		return false, fmt.Errorf("unsupported table for tenant row check: %s", tableName)
+	}
+	var exists bool
+	err := s.db.QueryRowContext(
+		ctx,
+		fmt.Sprintf("SELECT EXISTS (SELECT 1 FROM %s WHERE tenant_id=$1 LIMIT 1)", table),
+		tenantID,
+	).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
 }
 
 func (s *PGStore) hasColumn(ctx context.Context, tableName, columnName string) (bool, error) {

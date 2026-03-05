@@ -237,6 +237,8 @@ func (h *Handler) registerRoutes() {
 	h.mux.HandleFunc("GET /api/v1/reports/qualification", h.handleReportQualification)
 	h.mux.HandleFunc("GET /api/v1/reports/risk-events", h.handleReportRiskEvents)
 	h.mux.HandleFunc("GET /api/v1/libraries/search", h.handleLibrarySearch)
+	h.mux.HandleFunc("GET /api/v1/libraries/quality-gate", h.handleLibrariesQualityGate)
+	h.mux.HandleFunc("GET /api/v1/libraries/{type}/{id}/changes", h.handleLibraryChanges)
 	h.mux.HandleFunc("GET /api/v1/libraries/{type}/{id}/relations", h.handleLibraryRelations)
 	h.mux.HandleFunc("GET /api/v1/libraries/{type}/{id}", h.handleLibraryDetail)
 	h.mux.HandleFunc("GET /api/v1/libraries/executor-vault", h.handleExecutorCredentialVault)
@@ -1993,6 +1995,48 @@ func (h *Handler) handleReportThreeLibraries(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusNotImplemented, "report service is disabled")
 		return
 	}
+	accessScope, err := resolveLibraryAccessScope(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	includeHistory, validOn, err := parseLibraryHistoryOptions(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	qualityMode := strings.ToLower(strings.TrimSpace(queryString(r, "quality_gate")))
+	if qualityMode == "" {
+		qualityMode = "off"
+	}
+	if qualityMode != "off" && qualityMode != "block" {
+		writeError(w, http.StatusBadRequest, "invalid quality_gate")
+		return
+	}
+	qualitySampleLimit := 20
+	if v := strings.TrimSpace(queryString(r, "quality_sample_limit")); v != "" {
+		n, convErr := strconv.Atoi(v)
+		if convErr != nil || n <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid quality_sample_limit")
+			return
+		}
+		qualitySampleLimit = n
+	}
+	if qualityMode == "block" {
+		qualityResult, qualityErr := h.reportSvc.GetLibrariesQualityGate(r.Context(), qualitySampleLimit)
+		if qualityErr != nil {
+			writeError(w, http.StatusInternalServerError, qualityErr.Error())
+			return
+		}
+		if qualityResult != nil && strings.EqualFold(strings.TrimSpace(qualityResult.Status), "RED") {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error":        "three-libraries quality gate is RED",
+				"quality_gate": qualityResult,
+			})
+			return
+		}
+	}
 
 	parseWindow := func(limitKey, offsetKey string) (int, int, error) {
 		limit := 20
@@ -2037,6 +2081,9 @@ func (h *Handler) handleReportThreeLibraries(w http.ResponseWriter, r *http.Requ
 		StandardOffset:      standardOffset,
 		RegulationLimit:     regLimit,
 		RegulationOffset:    regOffset,
+		ExecutorRef:         accessScope.ExecutorRef,
+		IncludeHistory:      includeHistory,
+		ValidOn:             validOn,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -2158,6 +2205,16 @@ func (h *Handler) handleLibrarySearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotImplemented, "report service is disabled")
 		return
 	}
+	accessScope, err := resolveLibraryAccessScope(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	includeHistory, validOn, err := parseLibraryHistoryOptions(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	limit, offset, err := pagination(r, 20)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -2201,14 +2258,17 @@ func (h *Handler) handleLibrarySearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out, err := h.reportSvc.SearchLibraries(r.Context(), report.LibrarySearchQuery{
-		Keyword:     strings.TrimSpace(queryString(r, "keyword")),
-		Type:        strings.TrimSpace(queryString(r, "type")),
-		Status:      strings.TrimSpace(queryString(r, "status")),
-		UpdatedFrom: updatedFromPtr,
-		UpdatedTo:   updatedToPtr,
-		HasExecutor: hasExecutorPtr,
-		Limit:       limit,
-		Offset:      offset,
+		Keyword:        strings.TrimSpace(queryString(r, "keyword")),
+		Type:           strings.TrimSpace(queryString(r, "type")),
+		Status:         strings.TrimSpace(queryString(r, "status")),
+		UpdatedFrom:    updatedFromPtr,
+		UpdatedTo:      updatedToPtr,
+		HasExecutor:    hasExecutorPtr,
+		Limit:          limit,
+		Offset:         offset,
+		ExecutorRef:    accessScope.ExecutorRef,
+		IncludeHistory: includeHistory,
+		ValidOn:        validOn,
 	})
 	if err != nil {
 		msg := strings.ToLower(err.Error())
@@ -2222,9 +2282,120 @@ func (h *Handler) handleLibrarySearch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+func (h *Handler) handleLibraryChanges(w http.ResponseWriter, r *http.Request) {
+	if h.reportSvc == nil {
+		writeError(w, http.StatusNotImplemented, "report service is disabled")
+		return
+	}
+	accessScope, err := resolveLibraryAccessScope(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	includeHistory, validOn, err := parseLibraryHistoryOptions(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	libraryType := strings.TrimSpace(r.PathValue("type"))
+	if libraryType == "" {
+		writeError(w, http.StatusBadRequest, "library type is required")
+		return
+	}
+	id, err := pathInt64(r, "id")
+	if err != nil || id <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	limit, offset, err := pagination(r, 20)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	var fromPtr *time.Time
+	if v := strings.TrimSpace(queryString(r, "from")); v != "" {
+		t, parseErr := parseTime(v)
+		if parseErr != nil {
+			writeError(w, http.StatusBadRequest, "invalid from")
+			return
+		}
+		fromPtr = &t
+	}
+	var toPtr *time.Time
+	if v := strings.TrimSpace(queryString(r, "to")); v != "" {
+		t, parseErr := parseTime(v)
+		if parseErr != nil {
+			writeError(w, http.StatusBadRequest, "invalid to")
+			return
+		}
+		toPtr = &t
+	}
+
+	out, err := h.reportSvc.GetLibraryChanges(r.Context(), libraryType, id, report.LibraryChangesQuery{
+		Limit:          limit,
+		Offset:         offset,
+		From:           fromPtr,
+		To:             toPtr,
+		ExecutorRef:    accessScope.ExecutorRef,
+		IncludeHistory: includeHistory,
+		ValidOn:        validOn,
+	})
+	if err != nil {
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "unsupported library type") {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if out == nil {
+		writeError(w, http.StatusNotFound, "library item not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"type": libraryType,
+		"id":   id,
+		"data": out,
+	})
+}
+
+func (h *Handler) handleLibrariesQualityGate(w http.ResponseWriter, r *http.Request) {
+	if h.reportSvc == nil {
+		writeError(w, http.StatusNotImplemented, "report service is disabled")
+		return
+	}
+	sampleLimit := 20
+	if v := strings.TrimSpace(queryString(r, "sample_limit")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid sample_limit")
+			return
+		}
+		sampleLimit = n
+	}
+	out, err := h.reportSvc.GetLibrariesQualityGate(r.Context(), sampleLimit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 func (h *Handler) handleLibraryRelations(w http.ResponseWriter, r *http.Request) {
 	if h.reportSvc == nil {
 		writeError(w, http.StatusNotImplemented, "report service is disabled")
+		return
+	}
+	accessScope, err := resolveLibraryAccessScope(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	includeHistory, validOn, err := parseLibraryHistoryOptions(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	libraryType := strings.TrimSpace(r.PathValue("type"))
@@ -2247,7 +2418,10 @@ func (h *Handler) handleLibraryRelations(w http.ResponseWriter, r *http.Request)
 		limit = n
 	}
 	out, err := h.reportSvc.GetLibraryRelations(r.Context(), libraryType, id, report.LibraryRelationsQuery{
-		Limit: limit,
+		Limit:          limit,
+		ExecutorRef:    accessScope.ExecutorRef,
+		IncludeHistory: includeHistory,
+		ValidOn:        validOn,
 	})
 	if err != nil {
 		msg := strings.ToLower(err.Error())
@@ -2274,6 +2448,16 @@ func (h *Handler) handleLibraryDetail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotImplemented, "report service is disabled")
 		return
 	}
+	accessScope, err := resolveLibraryAccessScope(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	includeHistory, validOn, err := parseLibraryHistoryOptions(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	libraryType := strings.TrimSpace(r.PathValue("type"))
 	if libraryType == "" {
 		writeError(w, http.StatusBadRequest, "library type is required")
@@ -2284,7 +2468,7 @@ func (h *Handler) handleLibraryDetail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	out, err := h.reportSvc.GetLibraryDetail(r.Context(), libraryType, id)
+	out, err := h.reportSvc.GetLibraryDetail(r.Context(), libraryType, id, accessScope.ExecutorRef, includeHistory, validOn)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -2305,15 +2489,24 @@ func (h *Handler) handleExecutorCredentialVault(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusNotImplemented, "report service is disabled")
 		return
 	}
+	accessScope, err := resolveLibraryAccessScope(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	executorRef := strings.TrimSpace(queryString(r, "executor_ref"))
 	if executorRef == "" {
 		writeError(w, http.StatusBadRequest, "executor_ref is required")
 		return
 	}
+	if accessScope.ExecutorRef != "" && !strings.EqualFold(accessScope.ExecutorRef, executorRef) {
+		writeError(w, http.StatusForbidden, "executor scope cannot access other executor_ref")
+		return
+	}
 	drawingLimit := 20
 	if v := strings.TrimSpace(queryString(r, "drawing_limit")); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 {
+		n, convErr := strconv.Atoi(v)
+		if convErr != nil || n <= 0 {
 			writeError(w, http.StatusBadRequest, "invalid drawing_limit")
 			return
 		}
@@ -4256,6 +4449,69 @@ func pathInt(r *http.Request, name string) (int, error) {
 
 func queryString(r *http.Request, key string) string {
 	return r.URL.Query().Get(key)
+}
+
+type libraryAccessScope struct {
+	Role        string
+	ExecutorRef string
+}
+
+func resolveLibraryAccessScope(r *http.Request) (libraryAccessScope, error) {
+	scope := libraryAccessScope{Role: "admin"}
+	if r == nil {
+		return scope, nil
+	}
+
+	role := strings.ToLower(strings.TrimSpace(queryString(r, "viewer_role")))
+	if role == "" {
+		role = strings.ToLower(strings.TrimSpace(r.Header.Get("X-Viewer-Role")))
+	}
+	executorRef := strings.TrimSpace(queryString(r, "viewer_executor_ref"))
+	if executorRef == "" {
+		executorRef = strings.TrimSpace(r.Header.Get("X-Viewer-Executor-Ref"))
+	}
+
+	if role == "" && executorRef != "" {
+		role = "executor"
+	}
+	switch role {
+	case "", "admin", "manager":
+		scope.Role = "admin"
+		scope.ExecutorRef = ""
+		return scope, nil
+	case "executor", "self":
+		if executorRef == "" {
+			return scope, fmt.Errorf("viewer_executor_ref is required for executor role")
+		}
+		scope.Role = "executor"
+		scope.ExecutorRef = executorRef
+		return scope, nil
+	default:
+		return scope, fmt.Errorf("invalid viewer_role")
+	}
+}
+
+func parseLibraryHistoryOptions(r *http.Request) (bool, *time.Time, error) {
+	includeHistory := false
+	if v := strings.TrimSpace(queryString(r, "include_history")); v != "" {
+		switch strings.ToLower(v) {
+		case "1", "true", "yes", "y":
+			includeHistory = true
+		case "0", "false", "no", "n":
+			includeHistory = false
+		default:
+			return false, nil, fmt.Errorf("invalid include_history")
+		}
+	}
+	var validOn *time.Time
+	if v := strings.TrimSpace(queryString(r, "valid_on")); v != "" {
+		t, err := parseTime(v)
+		if err != nil {
+			return false, nil, fmt.Errorf("invalid valid_on")
+		}
+		validOn = &t
+	}
+	return includeHistory, validOn, nil
 }
 
 func pathOrQueryRef(r *http.Request, pathKey, queryKey string) string {

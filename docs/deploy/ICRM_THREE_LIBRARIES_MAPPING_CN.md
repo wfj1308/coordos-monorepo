@@ -60,6 +60,7 @@ psql "$env:DATABASE_URL" -f scripts/migrate_pg_schema.sql
 python scripts/migrate.py --phase company
 python scripts/migrate.py --phase employee
 python scripts/migrate.py --phase qualification
+python scripts/migrate.py --phase achievement
 python scripts/migrate.py --phase drawing
 python scripts/migrate.py --phase artifacts
 python scripts/migrate.py --phase verify

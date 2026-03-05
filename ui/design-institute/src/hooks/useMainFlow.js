@@ -1,12 +1,5 @@
-﻿import { useState } from "react";
-import {
-  apiRequest,
-  asArray,
-  normalizeListData,
-  pickField,
-  toInt,
-  trimTrailingSlash,
-} from "../components/app/utils";
+import { useState } from "react";
+import { apiRequest, asArray, normalizeListData, pickField, toInt, trimTrailingSlash } from "../components/app/utils";
 
 const flowBlueprint = [
   { key: "phase0", title: "Phase 0 注册入网", detail: "检查/初始化命名空间、资质容器、工程师基础数据" },

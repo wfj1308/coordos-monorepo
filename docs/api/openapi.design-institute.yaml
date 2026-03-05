@@ -1068,8 +1068,39 @@ paths:
         - name: regulation_offset
           in: query
           schema: {type: integer, default: 0}
+        - name: quality_gate
+          in: query
+          schema:
+            type: string
+            enum: [off, block]
+            default: off
+          description: When set to block, API returns 409 if three-libraries quality gate is RED.
+        - name: quality_sample_limit
+          in: query
+          schema: {type: integer, default: 20}
+          description: Sample limit used by quality-gate checks when quality_gate=block.
+        - name: viewer_role
+          in: query
+          schema:
+            type: string
+            enum: [admin, manager, executor]
+            default: admin
+          description: Access scope role. executor mode only returns data related to viewer_executor_ref.
+        - name: viewer_executor_ref
+          in: query
+          schema: {type: string}
+          description: Required when viewer_role=executor.
+        - name: include_history
+          in: query
+          schema: {type: boolean, default: false}
+          description: false=当前有效版本，true=历史追溯（法规相关）
+        - name: valid_on
+          in: query
+          schema: {type: string, format: date-time}
+          description: 生效判定时间点（RFC3339 或 YYYY-MM-DD）；仅 include_history=false 时用于按时间点查看有效版本
       responses:
         "200": {$ref: "#/components/responses/GenericSuccess"}
+        "409": {$ref: "#/components/responses/ErrorResponse"}
         default: {$ref: "#/components/responses/ErrorResponse"}
   /api/v1/reports/company:
     get:
@@ -1158,6 +1189,66 @@ paths:
           schema:
             type: integer
             format: int64
+        - name: viewer_role
+          in: query
+          schema:
+            type: string
+            enum: [admin, manager, executor]
+            default: admin
+        - name: viewer_executor_ref
+          in: query
+          schema: {type: string}
+        - name: include_history
+          in: query
+          schema: {type: boolean, default: false}
+        - name: valid_on
+          in: query
+          schema: {type: string, format: date-time}
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        "404": {$ref: "#/components/responses/ErrorResponse"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/libraries/{type}/{id}/changes:
+    get:
+      tags: [Report]
+      summary: Get change timeline for one library item
+      operationId: libraryChanges
+      parameters:
+        - name: type
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [qualification, standard, regulation]
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - name: from
+          in: query
+          schema: {type: string, format: date-time}
+        - name: to
+          in: query
+          schema: {type: string, format: date-time}
+        - name: viewer_role
+          in: query
+          schema:
+            type: string
+            enum: [admin, manager, executor]
+            default: admin
+        - name: viewer_executor_ref
+          in: query
+          schema: {type: string}
+        - name: include_history
+          in: query
+          schema: {type: boolean, default: false}
+        - name: valid_on
+          in: query
+          schema: {type: string, format: date-time}
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
       responses:
         "200": {$ref: "#/components/responses/GenericSuccess"}
         "404": {$ref: "#/components/responses/ErrorResponse"}
@@ -1183,6 +1274,21 @@ paths:
         - name: limit
           in: query
           schema: {type: integer, default: 30}
+        - name: viewer_role
+          in: query
+          schema:
+            type: string
+            enum: [admin, manager, executor]
+            default: admin
+        - name: viewer_executor_ref
+          in: query
+          schema: {type: string}
+        - name: include_history
+          in: query
+          schema: {type: boolean, default: false}
+        - name: valid_on
+          in: query
+          schema: {type: string, format: date-time}
       responses:
         "200": {$ref: "#/components/responses/GenericSuccess"}
         "404": {$ref: "#/components/responses/ErrorResponse"}
@@ -1213,8 +1319,35 @@ paths:
         - name: has_executor
           in: query
           schema: {type: boolean}
+        - name: viewer_role
+          in: query
+          schema:
+            type: string
+            enum: [admin, manager, executor]
+            default: admin
+        - name: viewer_executor_ref
+          in: query
+          schema: {type: string}
+        - name: include_history
+          in: query
+          schema: {type: boolean, default: false}
+        - name: valid_on
+          in: query
+          schema: {type: string, format: date-time}
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Offset"
+      responses:
+        "200": {$ref: "#/components/responses/GenericSuccess"}
+        default: {$ref: "#/components/responses/ErrorResponse"}
+  /api/v1/libraries/quality-gate:
+    get:
+      tags: [Report]
+      summary: Run data quality gate checks for three libraries
+      operationId: librariesQualityGate
+      parameters:
+        - name: sample_limit
+          in: query
+          schema: {type: integer, default: 20}
       responses:
         "200": {$ref: "#/components/responses/GenericSuccess"}
         default: {$ref: "#/components/responses/ErrorResponse"}
@@ -1231,6 +1364,15 @@ paths:
         - name: drawing_limit
           in: query
           schema: {type: integer, default: 20}
+        - name: viewer_role
+          in: query
+          schema:
+            type: string
+            enum: [admin, manager, executor]
+            default: admin
+        - name: viewer_executor_ref
+          in: query
+          schema: {type: string}
       responses:
         "200": {$ref: "#/components/responses/GenericSuccess"}
         default: {$ref: "#/components/responses/ErrorResponse"}

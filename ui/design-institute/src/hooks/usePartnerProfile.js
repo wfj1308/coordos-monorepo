@@ -32,6 +32,16 @@ export default function usePartnerProfile({ diBase, useAuth, token }) {
     return "";
   };
 
+  const isProofHashInput = (raw) => {
+    const value = String(raw || "").trim();
+    return (
+      /^sha256:[a-fA-F0-9]{64}$/.test(value) ||
+      /^md5:[a-fA-F0-9]{32}$/.test(value) ||
+      /^[a-fA-F0-9]{64}$/.test(value) ||
+      /^[a-fA-F0-9]{32}$/.test(value)
+    );
+  };
+
   const loadPartnerProfile = async () => {
     const di = trimTrailingSlash(diBase.trim());
     const namespaceCode = normalizeNamespaceCode(partnerProfileNamespace);
@@ -101,7 +111,7 @@ export default function usePartnerProfile({ diBase, useAuth, token }) {
     setVerifyError("");
     setVerifyResult(null);
     try {
-      const isHash = raw.startsWith("sha256:") || /^[a-fA-F0-9]{64}$/.test(raw);
+      const isHash = isProofHashInput(raw);
       const url = isHash
         ? `${di}/public/v1/verify/achievement/${encodeURIComponent(raw)}`
         : `${di}/api/v1/achievement/verify?ref=${encodeURIComponent(raw)}`;

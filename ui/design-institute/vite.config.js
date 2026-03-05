@@ -1,22 +1,8 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
-
-const rootDir = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   plugins: [react()],
-  build: {
-    rollupOptions: {
-      input: {
-        app: resolve(rootDir, "index.html"),
-        partnerProfile: resolve(rootDir, "partner-profile.html"),
-        join: resolve(rootDir, "join/index.html"),
-        joinLegacy: resolve(rootDir, "join.html"),
-      },
-    },
-  },
   server: {
     host: "127.0.0.1",
     port: 5173,

@@ -1,4 +1,4 @@
-﻿#!/bin/bash
+#!/bin/bash
 set -euo pipefail
 
 OLD_REPO="${1:?usage: migrate.sh <old_repo_path>}"

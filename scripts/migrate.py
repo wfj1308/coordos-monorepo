@@ -1,10 +1,11 @@
-#!/usr/bin/env python3
+# -----------------------------------------------------------------------------
 """
 iCRM -> CoordOS migration utility.
 
 Typical usage:
   python scripts/migrate.py --phase company
   python scripts/migrate.py --phase employee
+  python scripts/migrate.py --phase achievement
   python scripts/migrate.py --phase contract
   python scripts/migrate.py --phase finance
   python scripts/migrate.py --phase drawing
@@ -29,7 +30,7 @@ import mysql.connector
 import psycopg2
 import psycopg2.extras
 
-# 閳光偓閳光偓 闁板秶鐤?閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓
+# -----------------------------------------------------------------------------
 MYSQL_CONFIG = {
     "host": os.getenv("MYSQL_HOST", "localhost"),
     "port": int(os.getenv("MYSQL_PORT", "3306")),
@@ -52,6 +53,9 @@ BATCH_SIZE = int(os.getenv("MIGRATE_BATCH_SIZE", "500"))
 RAW_SOURCE = os.getenv("RAW_SOURCE", "mysql").strip().lower()
 RAW_PG_SOURCE_SCHEMA = os.getenv("RAW_PG_SOURCE_SCHEMA", "public").strip()
 REGULATION_SOURCE_CSV = os.getenv("REGULATION_SOURCE_CSV", "").strip()
+QUALITY_GATE_STRICT = os.getenv("QUALITY_GATE_STRICT", "0").strip().lower() in ("1", "true", "yes", "y")
+QUALITY_GATE_SAMPLE_LIMIT = int(os.getenv("QUALITY_GATE_SAMPLE_LIMIT", "20"))
+REGULATION_RUN_QUALITY_GATE = os.getenv("REGULATION_RUN_QUALITY_GATE", "1").strip().lower() in ("1", "true", "yes", "y")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -64,7 +68,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
-# 閳光偓閳光偓 鏉╃偞甯?閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓
+# -----------------------------------------------------------------------------
 def get_mysql():
     return mysql.connector.connect(**MYSQL_CONFIG)
 
@@ -74,7 +78,36 @@ def get_pg():
     return conn
 
 
-# 閳光偓閳光偓 鏉╀胶些閺冦儱绻?閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓閳光偓
+def _has_table_column(pg_cur, table_name: str, column_name: str) -> bool:
+    pg_cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema='public' AND table_name=%s AND column_name=%s
+        """,
+        (table_name, column_name),
+    )
+    return pg_cur.fetchone() is not None
+
+
+def _resolve_achievement_source(pg_cur) -> str:
+    """Prefer HISTORICAL_IMPORT when constraint allows it, fallback to LEGACY_IMPORT."""
+    pg_cur.execute(
+        """
+        SELECT 1
+        FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        JOIN pg_namespace n ON n.oid = t.relnamespace
+        WHERE n.nspname = 'public'
+          AND t.relname = 'achievement_utxos'
+          AND pg_get_constraintdef(c.oid) ILIKE '%HISTORICAL_IMPORT%'
+        LIMIT 1
+        """
+    )
+    return "HISTORICAL_IMPORT" if pg_cur.fetchone() else "LEGACY_IMPORT"
+
+
+# -----------------------------------------------------------------------------
 def log_migration(pg_cur, table: str, legacy_id: int, new_id: Optional[int],
                   status: str, error: str = None):
     pg_cur.execute("""
@@ -86,10 +119,10 @@ def log_migration(pg_cur, table: str, legacy_id: int, new_id: Optional[int],
     """, (table, legacy_id, new_id, status, error))
 
 
-# 閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜
-#  PHASE 1: 閸掑棗鍙曢崣姝岀讣缁変紮绱欓幍鈧張澶庛€冮惃鍕唨绾偓閿?# 閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 def migrate_companies():
-    log.info("=== PHASE 1: 鏉╀胶些閸掑棗鍙曢崣?(company 閳?companies) ===")
+    log.info("=== PHASE 1: migrate companies (company -> companies) ===")
     mysql_conn = get_mysql()
     pg_conn = get_pg()
     mysql_cur = mysql_conn.cursor(dictionary=True)
@@ -105,7 +138,7 @@ def migrate_companies():
         ORDER BY id
     """)
     rows = mysql_cur.fetchall()
-    log.info(f"  鐠囪褰?{len(rows)} 閺夆€冲瀻閸忣剙寰冪拋鏉跨秿")
+    log.info(f"  loaded {len(rows)} rows")
 
     success = 0
     for row in rows:
@@ -137,10 +170,10 @@ def migrate_companies():
             log_migration(pg_cur, "company", row["id"], new_id, "SUCCESS")
             success += 1
         except Exception as e:
-            log.error(f"  company id={row['id']} 婢惰精瑙? {e}")
+            log.error(f"  company id={row['id']} failed: {e}")
             log_migration(pg_cur, "company", row["id"], None, "FAILED", str(e))
 
-    # fill parent_id from legacy parent relation
+# -----------------------------------------------------------------------------
     mysql_cur.execute("SELECT id, company_id FROM company WHERE company_id IS NOT NULL AND deleted=0")
     for row in mysql_cur.fetchall():
         pg_cur.execute("""
@@ -150,14 +183,14 @@ def migrate_companies():
         """, (row["company_id"], row["id"]))
 
     pg_conn.commit()
-    log.info(f"  閴?閸掑棗鍙曢崣姝岀讣缁夎鐣幋? {success}/{len(rows)}")
+    log.info(f"  migrated rows: {success}/{len(rows)}")
     mysql_conn.close(); pg_conn.close()
 
 
-# 閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜
-#  PHASE 2: 閸涙ê浼愭潻浣盒?# 閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 def migrate_employees():
-    log.info("=== PHASE 2: 鏉╀胶些閸涙ê浼?(employee 閳?employees) ===")
+    log.info("=== PHASE 2: migrate employees (employee -> employees) ===")
     mysql_conn = get_mysql()
     pg_conn = get_pg()
     mysql_cur = mysql_conn.cursor(dictionary=True)
@@ -170,12 +203,12 @@ def migrate_employees():
         ORDER BY id
     """)
     rows = mysql_cur.fetchall()
-    log.info("  loaded %s employee rows", len(rows))
+    log.info("  migration progress")
 
     success = 0
     for row in rows:
         try:
-            # 閺屻儲澹樼€电懓绨查惃?PG company id
+# -----------------------------------------------------------------------------
             pg_cur.execute("SELECT id FROM companies WHERE legacy_id = %s", (row["company_id"],))
             company_row = pg_cur.fetchone()
             pg_company_id = company_row[0] if company_row else None
@@ -199,25 +232,25 @@ def migrate_employees():
                           result[0] if result else None, "SUCCESS")
             success += 1
         except Exception as e:
-            log.error(f"  employee id={row['id']} 婢惰精瑙? {e}")
+            log.error(f"  employee id={row['id']} failed: {e}")
             log_migration(pg_cur, "employee", row["id"], None, "FAILED", str(e))
 
     pg_conn.commit()
-    log.info(f"  閴?閸涙ê浼愭潻浣盒╃€瑰本鍨? {success}/{len(rows)}")
+    log.info(f"  migrated rows: {success}/{len(rows)}")
     mysql_conn.close(); pg_conn.close()
 
 
-# 閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜
-#  PHASE 3: 閸氬牆鎮撴潻浣盒╅敍鍫熸付婢跺秵娼呴敍灞芥儓婵梹澧柧楣冨櫢瀵ょ尨绱?# 閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 def migrate_contracts():
-    log.info("=== PHASE 3: 鏉╀胶些閸氬牆鎮?(contract 閳?contracts) ===")
+    log.info("=== PHASE 3: migrate contracts (contract -> contracts) ===")
     mysql_conn = get_mysql()
     pg_conn = get_pg()
     mysql_cur = mysql_conn.cursor(dictionary=True)
     pg_cur = pg_conn.cursor()
 
-    # 濞夈劍鍓伴敍姝盿rent 鐎涙顔岄弰顖氼潤閹垫﹢鎽奸敍灞界箑妞よ鍘涢幓鎺戝弳閻栬泛鎮庨崥灞藉晙閹绘帒鐡欓崥鍫濇倱
-    # topo-order contracts so parent rows land first
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
     mysql_cur.execute("""
         SELECT id, num, contractName, contractBalance, manageRatio,
                signing_subject, signing_time, contractDate, payType,
@@ -231,28 +264,28 @@ def migrate_contracts():
         ORDER BY id
     """)
     rows = mysql_cur.fetchall()
-    log.info("  loaded %s contract rows", len(rows))
+    log.info("  migration progress")
 
-    # 閹锋挻澧ら幒鎺戠碍閿涙碍鐥呴張?parent 閻ㄥ嫬鍘涢幓?    rows_dict = {r["id"]: r for r in rows}
+# -----------------------------------------------------------------------------
     ordered = _topo_sort_contracts(rows)
-    log.info("  topo sort done: %s contracts", len(ordered))
+    log.info("  migration progress")
 
     success = 0
     for row in ordered:
         try:
-            # 閺?company
+# -----------------------------------------------------------------------------
             pg_cur.execute("SELECT id FROM companies WHERE legacy_id=%s",
                            (row["company_id"],))
             r = pg_cur.fetchone()
             pg_company_id = r[0] if r else None
 
-            # 閺?employee
+# -----------------------------------------------------------------------------
             pg_cur.execute("SELECT id FROM employees WHERE legacy_id=%s",
                            (row["employee_id"],))
             r = pg_cur.fetchone()
             pg_employee_id = r[0] if r else None
 
-            # 閺屻儳鍩楅崥鍫濇倱閿涘牆鍑￠崷銊ュ闂堛垺褰冮崗銉礆
+# -----------------------------------------------------------------------------
             pg_parent_id = None
             if row["parent"]:
                 pg_cur.execute("SELECT id FROM contracts WHERE legacy_id=%s",
@@ -300,7 +333,7 @@ def migrate_contracts():
                           result[0] if result else None, "SUCCESS")
             success += 1
         except Exception as e:
-            log.error(f"  contract id={row['id']} 婢惰精瑙? {e}")
+            log.error(f"  contract id={row['id']} failed: {e}")
             pg_conn.rollback()
             log_migration(pg_cur, "contract", row["id"], None, "FAILED", str(e))
             pg_conn.commit()
@@ -308,12 +341,12 @@ def migrate_contracts():
 
         if success % BATCH_SIZE == 0:
             pg_conn.commit()
-            log.info(f"    瀹稿弶褰佹禍?{success} 閺?..")
+            log.info(f"    committed after {success} rows")
 
     pg_conn.commit()
-    log.info(f"  閴?閸氬牆鎮撴潻浣盒╃€瑰本鍨? {success}/{len(ordered)}")
+    log.info(f"  migrated contracts: {success}/{len(ordered)}")
 
-    # delegation-chain depth stats
+# -----------------------------------------------------------------------------
     pg_cur.execute("""
         WITH RECURSIVE chain AS (
             SELECT id, parent_id, 1 AS depth FROM contracts WHERE parent_id IS NULL
@@ -323,7 +356,7 @@ def migrate_contracts():
         )
         SELECT depth, COUNT(*) FROM chain GROUP BY depth ORDER BY depth
     """)
-    log.info("  婵梹澧柧鐐箒鎼达箑鍨庣敮?")
+    log.info("  contract chain depth distribution:")
     for r in pg_cur.fetchall():
         log.info("    depth %s: %s contracts", r[0], r[1])
 
@@ -331,7 +364,7 @@ def migrate_contracts():
 
 
 def _topo_sort_contracts(rows):
-    """閹锋挻澧ら幒鎺戠碍閿涙氨鍩楅崥鍫濇倱閸︺劌澧犻敍灞界摍閸氬牆鎮撻崷銊ユ倵"""
+    """Return contracts ordered by parent-first dependency."""
     id_map = {r["id"]: r for r in rows}
     visited = set()
     result = []
@@ -349,17 +382,17 @@ def _topo_sort_contracts(rows):
     return result
 
 
-# 閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜
-#  PHASE 4: 鐠愩垹濮熼弫鐗堝祦鏉╀胶些閿涘牊鏁瑰▎?缂佹挾鐣?閸欐垹銈ㄩ敍?# 閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 def migrate_finance():
-    log.info("=== PHASE 4: 鏉╀胶些鐠愩垹濮熼弫鐗堝祦 ===")
+    log.info("=== PHASE 4: migrate finance (gatherings/balances/invoices) ===")
     _migrate_gatherings()
     _migrate_balances()
     _migrate_invoices()
 
 
 def _migrate_gatherings():
-    log.info("  4a. 閺€鑸殿儥閸?(gathering 閳?gatherings)")
+    log.info("  4a. migrate gatherings (gathering -> gatherings)")
     mysql_conn = get_mysql()
     pg_conn = get_pg()
     mysql_cur = mysql_conn.cursor(dictionary=True)
@@ -429,12 +462,12 @@ def _migrate_gatherings():
         if success % BATCH_SIZE == 0:
             pg_conn.commit()
     pg_conn.commit()
-    log.info(f"    閴?閺€鑸殿儥閸? {success}/{len(rows)}")
+    log.info(f"  migrated rows: {success}/{len(rows)}")
     mysql_conn.close(); pg_conn.close()
 
 
 def _migrate_balances():
-    log.info("  4b. 缂佹挾鐣婚崡?(balance 閳?balances)")
+    log.info("  4b. migrate balances (balance -> balances)")
     mysql_conn = get_mysql()
     pg_conn = get_pg()
     mysql_cur = mysql_conn.cursor(dictionary=True)
@@ -508,12 +541,12 @@ def _migrate_balances():
         if success % BATCH_SIZE == 0:
             pg_conn.commit()
     pg_conn.commit()
-    log.info(f"    閴?缂佹挾鐣婚崡? {success}/{len(rows)}")
+    log.info(f"  migrated rows: {success}/{len(rows)}")
     mysql_conn.close(); pg_conn.close()
 
 
 def _migrate_invoices():
-    log.info("  4c. 閸欐垹銈?(invoice 閳?invoices)")
+    log.info("  4c. migrate invoices (invoice -> invoices)")
     mysql_conn = get_mysql()
     pg_conn = get_pg()
     mysql_cur = mysql_conn.cursor(dictionary=True)
@@ -579,14 +612,300 @@ def _migrate_invoices():
         if success % BATCH_SIZE == 0:
             pg_conn.commit()
     pg_conn.commit()
-    log.info(f"    閴?閸欐垹銈? {success}/{len(rows)}")
+    log.info(f"  migrated rows: {success}/{len(rows)}")
     mysql_conn.close(); pg_conn.close()
 
 
-# 閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜
-#  PHASE 5: 閸ュ墽鐒婃潻浣盒?# 閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+def migrate_achievements():
+    """
+    Build historical achievement_utxos from real contract settlement progress.
+
+    This phase is idempotent and can be rerun safely.
+    It only targets contracts with positive historical gathering amount.
+    """
+    log.info("=== PHASE 4.5: migrate achievements (contracts -> achievement_utxos) ===")
+    pg_conn = get_pg()
+    pg_cur = pg_conn.cursor()
+
+    try:
+        source_label = _resolve_achievement_source(pg_cur)
+        legacy_pattern = "v://cn.zhongbei/utxo/achievement/legacy-contract/%@v1"
+        log.info("  achievement source label: %s", source_label)
+
+        pg_cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM contracts c
+            WHERE c.tenant_id=%s
+              AND c.deleted=FALSE
+              AND COALESCE(c.totle_gathering, 0) > 0
+            """,
+            (TENANT_ID,),
+        )
+        contract_candidates = int(pg_cur.fetchone()[0])
+
+        pg_cur.execute(
+            """
+            WITH contract_base AS (
+                SELECT
+                    c.id,
+                    c.tenant_id,
+                    COALESCE(
+                        NULLIF(c.project_ref, ''),
+                        'v://cn.zhongbei/project/legacy-contract/' || c.id::text
+                    )::varchar(500) AS project_ref_norm,
+                    COALESCE(
+                        NULLIF(e.executor_ref, ''),
+                        NULLIF(co.executor_ref, ''),
+                        'v://cn.zhongbei/executor/org/unknown@v1'
+                    )::varchar(500) AS executor_ref_norm,
+                    COALESCE(c.ref, '')::varchar(500) AS contract_ref,
+                    COALESCE(c.contract_balance, 0)::numeric(18,2) AS contract_amount,
+                    COALESCE(c.totle_gathering, 0)::numeric(18,2) AS settled_amount,
+                    COALESCE(c.signing_time, c.contract_date, c.created_at, c.updated_at, NOW()) AS event_time,
+                    LEFT(COALESCE(NULLIF(c.contract_name, ''), NULLIF(c.num, ''), 'legacy-contract-' || c.id::text), 500) AS project_name,
+                    LEFT(COALESCE(co.name, ''), 255) AS owner_name,
+                    LEFT(COALESCE(co.address, ''), 255) AS region,
+                    LEFT(COALESCE(NULLIF(c.contract_type, ''), 'LEGACY'), 64) AS project_type
+                FROM contracts c
+                LEFT JOIN companies co ON co.id = c.company_id
+                LEFT JOIN employees e ON e.id = c.employee_id
+                WHERE c.tenant_id=%s
+                  AND c.deleted=FALSE
+                  AND COALESCE(c.totle_gathering, 0) > 0
+            ),
+            rows_to_upsert AS (
+                SELECT
+                    cb.*,
+                    ('v://cn.zhongbei/utxo/achievement/legacy-contract/' || cb.id::text || '@v1')::varchar(500) AS utxo_ref,
+                    ('v://cn.zhongbei/experience/contract/' || cb.id::text || '@v1')::varchar(500) AS experience_ref,
+                    LEFT(
+                        'md5:' || md5(
+                            cb.project_ref_norm || '|' ||
+                            cb.executor_ref_norm || '|' ||
+                            cb.id::text || '|' ||
+                            cb.settled_amount::text || '|' ||
+                            cb.event_time::text
+                        ),
+                        255
+                    )::varchar(255) AS proof_hash
+                FROM contract_base cb
+            )
+            INSERT INTO achievement_utxos (
+                utxo_ref, spu_ref, project_ref, executor_ref, genesis_ref, contract_id, payload,
+                proof_hash, status, source, experience_ref, tenant_id, ingested_at, settled_at
+            )
+            SELECT
+                r.utxo_ref,
+                'v://cn.zhongbei/spu/legacy/contract_settlement@v1',
+                r.project_ref_norm,
+                r.executor_ref_norm,
+                NULL,
+                r.id,
+                jsonb_build_object(
+                    'legacy_contract_id', r.id,
+                    'source', 'contracts',
+                    'project_name', r.project_name,
+                    'project_type', r.project_type,
+                    'contract_amount', r.contract_amount,
+                    'settled_amount', r.settled_amount
+                ),
+                r.proof_hash,
+                'SETTLED',
+                %s,
+                r.experience_ref,
+                r.tenant_id,
+                r.event_time,
+                r.event_time
+            FROM rows_to_upsert r
+            ON CONFLICT (utxo_ref) DO UPDATE SET
+                spu_ref = EXCLUDED.spu_ref,
+                project_ref = EXCLUDED.project_ref,
+                executor_ref = EXCLUDED.executor_ref,
+                contract_id = EXCLUDED.contract_id,
+                payload = EXCLUDED.payload,
+                proof_hash = EXCLUDED.proof_hash,
+                status = EXCLUDED.status,
+                source = EXCLUDED.source,
+                experience_ref = EXCLUDED.experience_ref,
+                ingested_at = EXCLUDED.ingested_at,
+                settled_at = EXCLUDED.settled_at
+            """,
+            (TENANT_ID, source_label),
+        )
+        affected_rows = pg_cur.rowcount
+
+        pg_cur.execute(
+            """
+            INSERT INTO migration_log (table_name, legacy_id, new_id, status, error_msg)
+            SELECT
+                'achievement'::varchar(100),
+                c.id AS legacy_id,
+                a.id AS new_id,
+                'SUCCESS'::varchar(20) AS status,
+                NULL::text AS error_msg
+            FROM contracts c
+            JOIN achievement_utxos a
+              ON a.tenant_id = c.tenant_id
+             AND a.contract_id = c.id
+             AND a.utxo_ref = ('v://cn.zhongbei/utxo/achievement/legacy-contract/' || c.id::text || '@v1')
+            WHERE c.tenant_id=%s
+              AND c.deleted=FALSE
+              AND COALESCE(c.totle_gathering, 0) > 0
+            ON CONFLICT (table_name, legacy_id) DO UPDATE
+            SET status=EXCLUDED.status,
+                new_id=EXCLUDED.new_id,
+                error_msg=NULL,
+                migrated_at=NOW()
+            """,
+            (TENANT_ID,),
+        )
+
+        optional_columns = [
+            "ref",
+            "namespace_ref",
+            "project_name",
+            "project_type",
+            "owner_name",
+            "region",
+            "contract_amount",
+            "completed_year",
+            "completed_at",
+            "attachments",
+            "inputs_hash",
+            "settled_amount",
+            "layer",
+            "updated_at",
+        ]
+        has_col = {
+            col: _has_table_column(pg_cur, "achievement_utxos", col)
+            for col in optional_columns
+        }
+
+        set_expr = []
+        if has_col["ref"]:
+            set_expr.append("ref = a.utxo_ref")
+        if has_col["namespace_ref"]:
+            set_expr.append(
+                "namespace_ref = CASE "
+                "WHEN b.project_ref_norm LIKE 'v://%%/project/%%' THEN split_part(b.project_ref_norm, '/project/', 1) "
+                "ELSE 'v://cn.zhongbei' END"
+            )
+        if has_col["project_name"]:
+            set_expr.append("project_name = b.project_name")
+        if has_col["project_type"]:
+            set_expr.append("project_type = b.project_type")
+        if has_col["owner_name"]:
+            set_expr.append("owner_name = b.owner_name")
+        if has_col["region"]:
+            set_expr.append("region = b.region")
+        if has_col["contract_amount"]:
+            set_expr.append("contract_amount = b.contract_amount")
+        if has_col["completed_year"]:
+            set_expr.append("completed_year = EXTRACT(YEAR FROM b.event_time)::int")
+        if has_col["completed_at"]:
+            set_expr.append("completed_at = b.event_time::date")
+        if has_col["attachments"]:
+            set_expr.append("attachments = '[]'::jsonb")
+        if has_col["inputs_hash"]:
+            set_expr.append(
+                "inputs_hash = LEFT('md5:' || md5("
+                "b.project_ref_norm || '|' || b.contract_ref || '|' || b.executor_ref_norm || '|' || b.id::text"
+                "), 255)"
+            )
+        if has_col["settled_amount"]:
+            set_expr.append("settled_amount = b.settled_amount")
+        if has_col["layer"]:
+            set_expr.append("layer = 4")
+        if has_col["updated_at"]:
+            set_expr.append("updated_at = NOW()")
+
+        enriched_rows = 0
+        if set_expr:
+            pg_cur.execute(
+                f"""
+                WITH base AS (
+                    SELECT
+                        c.id,
+                        COALESCE(
+                            NULLIF(c.project_ref, ''),
+                            'v://cn.zhongbei/project/legacy-contract/' || c.id::text
+                        )::text AS project_ref_norm,
+                        COALESCE(
+                            NULLIF(e.executor_ref, ''),
+                            NULLIF(co.executor_ref, ''),
+                            'v://cn.zhongbei/executor/org/unknown@v1'
+                        )::text AS executor_ref_norm,
+                        COALESCE(c.ref, '')::text AS contract_ref,
+                        COALESCE(c.contract_balance, 0)::numeric(18,2) AS contract_amount,
+                        COALESCE(c.totle_gathering, 0)::numeric(18,2) AS settled_amount,
+                        COALESCE(c.signing_time, c.contract_date, c.created_at, c.updated_at, NOW()) AS event_time,
+                        LEFT(COALESCE(NULLIF(c.contract_name, ''), NULLIF(c.num, ''), 'legacy-contract-' || c.id::text), 500)::text AS project_name,
+                        LEFT(COALESCE(co.name, ''), 255)::text AS owner_name,
+                        LEFT(COALESCE(co.address, ''), 255)::text AS region,
+                        LEFT(COALESCE(NULLIF(c.contract_type, ''), 'LEGACY'), 64)::text AS project_type
+                    FROM contracts c
+                    LEFT JOIN companies co ON co.id = c.company_id
+                    LEFT JOIN employees e ON e.id = c.employee_id
+                    WHERE c.tenant_id=%s
+                      AND c.deleted=FALSE
+                      AND COALESCE(c.totle_gathering, 0) > 0
+                )
+                UPDATE achievement_utxos a
+                SET {", ".join(set_expr)}
+                FROM base b
+                WHERE a.contract_id = b.id
+                  AND a.tenant_id = %s
+                  AND a.utxo_ref LIKE %s
+                """,
+                (TENANT_ID, TENANT_ID, legacy_pattern),
+            )
+            enriched_rows = pg_cur.rowcount
+
+        pg_cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM achievement_utxos
+            WHERE tenant_id=%s
+              AND utxo_ref LIKE %s
+            """,
+            (TENANT_ID, legacy_pattern),
+        )
+        legacy_total = int(pg_cur.fetchone()[0])
+
+        pg_cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM achievement_utxos
+            WHERE tenant_id=%s
+              AND source=%s
+            """,
+            (TENANT_ID, source_label),
+        )
+        source_total = int(pg_cur.fetchone()[0])
+
+        pg_conn.commit()
+        log.info(
+            "  achievement migration complete: candidates=%s, upsert_affected=%s, enriched=%s, "
+            "legacy_total=%s, source_total=%s",
+            contract_candidates,
+            affected_rows,
+            enriched_rows,
+            legacy_total,
+            source_total,
+        )
+    except Exception as e:
+        pg_conn.rollback()
+        log.error("  achievement migration failed: %s", e)
+        raise
+    finally:
+        pg_conn.close()
+
+
 def migrate_drawings():
-    log.info("=== PHASE 5: 鏉╀胶些閸ュ墽鐒?(drawing 閳?drawings) ===")
+    log.info("=== PHASE 5: migrate drawings (drawing -> drawings) ===")
     mysql_conn = get_mysql()
     pg_conn = get_pg()
     mysql_cur = mysql_conn.cursor(dictionary=True)
@@ -648,14 +967,267 @@ def migrate_drawings():
         if success % BATCH_SIZE == 0:
             pg_conn.commit()
     pg_conn.commit()
-    log.info(f"  閴?閸ュ墽鐒? {success}/{len(rows)}")
+    log.info(f"  migrated rows: {success}/{len(rows)}")
     mysql_conn.close(); pg_conn.close()
 
 
-# 閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜
-#  PHASE 6: 閺嶏繝鐛?# 閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+def evaluate_three_libraries_quality_gate(pg_cur, tenant_id=TENANT_ID, sample_limit=20):
+    sample_limit = max(1, min(int(sample_limit or 20), 200))
+    checks = []
+
+    def has_table(table_name: str) -> bool:
+        pg_cur.execute("SELECT to_regclass(%s)", (f"public.{table_name}",))
+        return pg_cur.fetchone()[0] is not None
+
+    def append_check(code, name, severity, status, count, message):
+        checks.append(
+            {
+                "code": str(code or "").strip(),
+                "name": str(name or "").strip(),
+                "severity": str(severity or "ERROR").strip().upper(),
+                "status": str(status or "PASS").strip().upper(),
+                "count": int(count or 0),
+                "message": str(message or "").strip(),
+            }
+        )
+
+    has_assignments = has_table("qualification_assignments")
+    has_qualifications = has_table("qualifications")
+    has_projects = has_table("project_nodes")
+    has_reg_docs = has_table("regulation_documents")
+    has_reg_versions = has_table("regulation_versions")
+
+    if has_assignments and has_qualifications:
+        has_qual_deleted = _has_table_column(pg_cur, "qualifications", "deleted")
+        deleted_clause = " AND COALESCE(q.deleted, FALSE)=FALSE" if has_qual_deleted else ""
+        pg_cur.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM qualification_assignments a
+            LEFT JOIN qualifications q
+              ON q.id = a.qualification_id
+             AND q.tenant_id = a.tenant_id{deleted_clause}
+            WHERE a.tenant_id=%s
+              AND q.id IS NULL
+            """,
+            (tenant_id,),
+        )
+        orphan_count = int(pg_cur.fetchone()[0] or 0)
+        append_check(
+            "ORPHAN_ASSIGNMENT_QUALIFICATION",
+            "Orphan qualification assignment",
+            "ERROR",
+            "FAIL" if orphan_count > 0 else "PASS",
+            orphan_count,
+            "qualification_assignments.qualification_id has no active qualification",
+        )
+    else:
+        append_check(
+            "ORPHAN_ASSIGNMENT_QUALIFICATION",
+            "Orphan qualification assignment",
+            "ERROR",
+            "SKIP",
+            0,
+            "missing qualification_assignments or qualifications table",
+        )
+
+    if has_assignments and has_projects:
+        has_project_deleted = _has_table_column(pg_cur, "project_nodes", "deleted")
+        project_deleted_clause = " AND COALESCE(p.deleted, FALSE)=FALSE" if has_project_deleted else ""
+        pg_cur.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM qualification_assignments a
+            LEFT JOIN project_nodes p
+              ON p.tenant_id = a.tenant_id
+             AND p.ref = a.project_ref{project_deleted_clause}
+            WHERE a.tenant_id=%s
+              AND COALESCE(a.project_ref, '') <> ''
+              AND p.ref IS NULL
+            """,
+            (tenant_id,),
+        )
+        orphan_project_count = int(pg_cur.fetchone()[0] or 0)
+        append_check(
+            "ORPHAN_ASSIGNMENT_PROJECT",
+            "Orphan project assignment",
+            "ERROR",
+            "FAIL" if orphan_project_count > 0 else "PASS",
+            orphan_project_count,
+            "qualification_assignments.project_ref has no active project_nodes.ref",
+        )
+    else:
+        append_check(
+            "ORPHAN_ASSIGNMENT_PROJECT",
+            "Orphan project assignment",
+            "ERROR",
+            "SKIP",
+            0,
+            "missing qualification_assignments or project_nodes table",
+        )
+
+    if has_reg_docs:
+        has_reg_deleted = _has_table_column(pg_cur, "regulation_documents", "deleted")
+        reg_deleted_clause = " AND COALESCE(deleted, FALSE)=FALSE" if has_reg_deleted else ""
+        pg_cur.execute(
+            f"""
+            SELECT COALESCE(SUM(dup.cnt), 0)::int
+            FROM (
+                SELECT COUNT(*)::int AS cnt
+                FROM regulation_documents
+                WHERE tenant_id=%s{reg_deleted_clause}
+                  AND COALESCE(BTRIM(doc_no), '') <> ''
+                GROUP BY COALESCE(doc_no, '')
+                HAVING COUNT(*) > 1
+            ) dup
+            """,
+            (tenant_id,),
+        )
+        duplicate_doc_no_count = int(pg_cur.fetchone()[0] or 0)
+        append_check(
+            "DUPLICATE_REGULATION_DOC_NO",
+            "Duplicate regulation doc_no",
+            "ERROR",
+            "FAIL" if duplicate_doc_no_count > 0 else "PASS",
+            duplicate_doc_no_count,
+            "regulation_documents has duplicate doc_no values",
+        )
+    else:
+        append_check(
+            "DUPLICATE_REGULATION_DOC_NO",
+            "Duplicate regulation doc_no",
+            "ERROR",
+            "SKIP",
+            0,
+            "missing regulation_documents table",
+        )
+
+    if has_qualifications:
+        has_qual_deleted = _has_table_column(pg_cur, "qualifications", "deleted")
+        qual_deleted_clause = " AND COALESCE(deleted, FALSE)=FALSE" if has_qual_deleted else ""
+        pg_cur.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM qualifications
+            WHERE tenant_id=%s{qual_deleted_clause}
+              AND COALESCE(BTRIM(executor_ref), '') = ''
+            """,
+            (tenant_id,),
+        )
+        empty_executor_count = int(pg_cur.fetchone()[0] or 0)
+        append_check(
+            "EMPTY_EXECUTOR_REF",
+            "Empty qualification.executor_ref",
+            "ERROR",
+            "FAIL" if empty_executor_count > 0 else "PASS",
+            empty_executor_count,
+            "qualifications rows have empty executor_ref",
+        )
+    else:
+        append_check(
+            "EMPTY_EXECUTOR_REF",
+            "Empty qualification.executor_ref",
+            "ERROR",
+            "SKIP",
+            0,
+            "missing qualifications table",
+        )
+
+    if has_reg_docs and has_reg_versions:
+        has_reg_deleted = _has_table_column(pg_cur, "regulation_documents", "deleted")
+        reg_deleted_clause = " AND COALESCE(d.deleted, FALSE)=FALSE" if has_reg_deleted else ""
+        pg_cur.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM (
+                SELECT d.id
+                FROM regulation_documents d
+                LEFT JOIN regulation_versions v
+                  ON v.tenant_id=d.tenant_id
+                 AND v.document_id=d.id
+                WHERE d.tenant_id=%s{reg_deleted_clause}
+                GROUP BY d.id
+                HAVING COUNT(v.id)=0
+            ) x
+            """,
+            (tenant_id,),
+        )
+        no_version_count = int(pg_cur.fetchone()[0] or 0)
+        append_check(
+            "REGULATION_WITHOUT_VERSION",
+            "Regulation without version",
+            "ERROR",
+            "FAIL" if no_version_count > 0 else "PASS",
+            no_version_count,
+            "regulation_documents rows missing regulation_versions",
+        )
+    else:
+        append_check(
+            "REGULATION_WITHOUT_VERSION",
+            "Regulation without version",
+            "ERROR",
+            "SKIP",
+            0,
+            "missing regulation_documents or regulation_versions table",
+        )
+
+    failed_checks = sum(1 for c in checks if c["status"] == "FAIL" and c["severity"] != "WARN")
+    warning_checks = sum(1 for c in checks if c["status"] == "FAIL" and c["severity"] == "WARN")
+    status = "GREEN"
+    if failed_checks > 0:
+        status = "RED"
+    elif warning_checks > 0:
+        status = "YELLOW"
+    return {
+        "status": status,
+        "total_checks": len(checks),
+        "failed_checks": failed_checks,
+        "warning_checks": warning_checks,
+        "sample_limit": sample_limit,
+        "checks": checks,
+    }
+
+
+def log_three_libraries_quality_gate(result):
+    if not result:
+        log.warning("  quality gate result is empty")
+        return
+        log.info(
+        "  three-libraries quality gate: status=%s total=%s failed=%s warning=%s sample_limit=%s",
+        result.get("status"),
+        result.get("total_checks"),
+        result.get("failed_checks"),
+        result.get("warning_checks"),
+        result.get("sample_limit"),
+    )
+    for check in result.get("checks", []):
+        log.info(
+            "    [%s] %s (%s) count=%s - %s",
+            check.get("status"),
+            check.get("code"),
+            check.get("severity"),
+            check.get("count"),
+            check.get("message"),
+        )
+
+
+def run_three_libraries_quality_gate(strict=None, sample_limit=None):
+    strict_mode = QUALITY_GATE_STRICT if strict is None else bool(strict)
+    check_limit = QUALITY_GATE_SAMPLE_LIMIT if sample_limit is None else sample_limit
+    pg_conn = get_pg()
+    pg_cur = pg_conn.cursor()
+    result = evaluate_three_libraries_quality_gate(pg_cur, TENANT_ID, check_limit)
+    log_three_libraries_quality_gate(result)
+    pg_conn.close()
+    if strict_mode and result.get("status") == "RED":
+        raise RuntimeError("three-libraries quality gate is RED; blocking migration pipeline")
+    return result
+
+
 def verify():
-    log.info("=== PHASE 6: 閺佺増宓佺€瑰本鏆ｉ幀褎鐗庢?===")
+    log.info("=== PHASE 6: verify migration result ===")
     pg_conn = get_pg()
     pg_cur = pg_conn.cursor()
 
@@ -743,7 +1315,7 @@ def verify():
             pg_conn.rollback()
             log.warning("  %s: skipped (%s)", name, e)
 
-    # 婢惰精瑙︾拋鏉跨秿
+# -----------------------------------------------------------------------------
     pg_cur.execute("""
         SELECT table_name, COUNT(*) as failed
         FROM migration_log WHERE status='FAILED'
@@ -757,7 +1329,7 @@ def verify():
     else:
         log.info("  no failed rows in migration_log")
 
-    # contract chain integrity
+# -----------------------------------------------------------------------------
     pg_cur.execute("""
         SELECT COUNT(*) FROM contracts
         WHERE parent_id IS NOT NULL
@@ -769,7 +1341,7 @@ def verify():
     else:
         log.info("  contract parent chain is complete")
 
-    # amount spot-check
+# -----------------------------------------------------------------------------
     pg_cur.execute("""
         SELECT SUM(contract_balance) FROM contracts
         WHERE migrate_status='LEGACY' AND deleted=FALSE
@@ -777,13 +1349,22 @@ def verify():
     total = pg_cur.fetchone()[0]
     log.info(f"  contract total amount: {total:,.2f}" if total else "  contract total amount: N/A")
 
+    quality_result = evaluate_three_libraries_quality_gate(
+        pg_cur,
+        TENANT_ID,
+        QUALITY_GATE_SAMPLE_LIMIT,
+    )
+    log_three_libraries_quality_gate(quality_result)
+
     pg_conn.close()
+    if QUALITY_GATE_STRICT and quality_result.get("status") == "RED":
+        raise RuntimeError("verify failed: three-libraries quality gate is RED")
 
 
-# 閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜
-#  娑撹鍙嗛崣?# 閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜閳烘劏鏅查埡鎰ㄦ櫜
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 def migrate_qualifications():
-    log.info("=== PHASE 5: migrate qualifications (worker/profession -> qualifications) ===")
+    log.info("=== PHASE 5.5: migrate qualifications (worker/profession -> qualifications) ===")
     mysql_conn = get_mysql()
     pg_conn = get_pg()
     mysql_cur = mysql_conn.cursor(dictionary=True)
@@ -818,7 +1399,7 @@ def migrate_qualifications():
         """
     )
     rows = mysql_cur.fetchall()
-    log.info("  loaded %s worker qualification rows", len(rows))
+    log.info("  migration progress")
 
     inserted = 0
     skipped = 0
@@ -936,16 +1517,16 @@ def migrate_qualifications():
             pg_conn.commit()
 
     pg_conn.commit()
-    log.info("  qualification migration complete: inserted_or_updated=%s, skipped=%s", inserted, skipped)
+    log.info("  migration progress")
     mysql_conn.close()
     pg_conn.close()
 
 
 def migrate_regulations():
-    log.info("=== PHASE 5: migrate regulations (csv -> regulation_documents/versions) ===")
+    log.info("=== PHASE 5: migrate drawings (drawing -> drawings) ===")
     source_csv = REGULATION_SOURCE_CSV or os.getenv("REGULATION_CSV", "").strip()
     if not source_csv:
-        log.info("  skipped: REGULATION_SOURCE_CSV is not set")
+        log.info("  migration progress")
         return
     if not os.path.isfile(source_csv):
         log.warning("  skipped: regulation source csv not found: %s", source_csv)
@@ -954,6 +1535,8 @@ def migrate_regulations():
     allowed_status = {"DRAFT", "EFFECTIVE", "SUPERSEDED", "REPEALED", "ARCHIVED"}
     pg_conn = get_pg()
     pg_cur = pg_conn.cursor()
+    has_reg_project_ref = _has_table_column(pg_cur, "regulation_documents", "project_ref")
+    has_reg_executor_ref = _has_table_column(pg_cur, "regulation_documents", "executor_ref")
 
     inserted_docs = 0
     updated_docs = 0
@@ -994,6 +1577,8 @@ def migrate_regulations():
             keywords = _pick_first_non_empty(row, "keywords", "tags")
             summary = _pick_first_non_empty(row, "summary", "abstract", "description")
             source_url = _pick_first_non_empty(row, "source_url", "url", "source")
+            project_ref = _pick_first_non_empty(row, "project_ref", "applicable_project_ref", "project")
+            executor_ref = _pick_first_non_empty(row, "executor_ref", "applicable_executor_ref", "executor")
 
             effective_from = _safe_datetime(effective_from_raw)
             effective_to = _safe_datetime(_pick_first_non_empty(row, "effective_to", "expire_at", "expired_at"))
@@ -1119,6 +1704,23 @@ def migrate_regulations():
                     )
                     updated_docs += 1
 
+                if has_reg_project_ref or has_reg_executor_ref:
+                    update_fields = []
+                    update_args = []
+                    if has_reg_project_ref:
+                        update_fields.append("project_ref = COALESCE(%s, project_ref)")
+                        update_args.append(project_ref or None)
+                    if has_reg_executor_ref:
+                        update_fields.append("executor_ref = COALESCE(%s, executor_ref)")
+                        update_args.append(executor_ref or None)
+                    update_args.append(document_id)
+                    pg_cur.execute(
+                        "UPDATE regulation_documents SET "
+                        + ", ".join(update_fields)
+                        + " WHERE id=%s",
+                        tuple(update_args),
+                    )
+
                 pg_cur.execute(
                     """
                     SELECT id
@@ -1211,6 +1813,16 @@ def migrate_regulations():
         updated_versions,
         skipped,
     )
+    if REGULATION_RUN_QUALITY_GATE:
+        quality_result = evaluate_three_libraries_quality_gate(
+            pg_cur,
+            TENANT_ID,
+            QUALITY_GATE_SAMPLE_LIMIT,
+        )
+        log_three_libraries_quality_gate(quality_result)
+        if QUALITY_GATE_STRICT and quality_result.get("status") == "RED":
+            pg_conn.close()
+            raise RuntimeError("regulation migration blocked: three-libraries quality gate is RED")
     pg_conn.close()
 
 
@@ -2948,7 +3560,7 @@ def _infer_approve_biz(catalog, oid, legacy_maps, biz_ref_maps):
 
 
 def migrate_approve_history():
-    log.info("=== PHASE 8: migrate approval history ===")
+    log.info("  migration progress")
     mysql_conn = get_mysql()
     pg_conn = get_pg()
     mysql_cur = mysql_conn.cursor(dictionary=True)
@@ -2995,7 +3607,7 @@ def migrate_approve_history():
             """
         )
         rows = mysql_cur.fetchall()
-        log.info("  approve_flow rows: %s", len(rows))
+        log.info("  migration progress")
 
         success = 0
         for row in rows:
@@ -3076,8 +3688,8 @@ def migrate_approve_history():
             if success % BATCH_SIZE == 0:
                 pg_conn.commit()
         pg_conn.commit()
-        log.info("  approve_flow migrated: %s/%s", success, len(rows))
-        # Rebuild legacy->new id map from DB to avoid stale ids after rollback batches.
+        log.info("  migration progress")
+# -----------------------------------------------------------------------------
         pg_cur.execute("SELECT legacy_id, id FROM approve_flows WHERE legacy_id IS NOT NULL")
         flow_map = {int(legacy_id): int(flow_id) for legacy_id, flow_id in pg_cur.fetchall()}
 
@@ -3089,7 +3701,7 @@ def migrate_approve_history():
             """
         )
         task_rows = mysql_cur.fetchall()
-        log.info("  approve_task rows: %s", len(task_rows))
+        log.info("  migration progress")
         seq_by_flow = {}
         task_success = 0
 
@@ -3153,7 +3765,7 @@ def migrate_approve_history():
             if task_success % BATCH_SIZE == 0:
                 pg_conn.commit()
         pg_conn.commit()
-        log.info("  approve_task migrated: %s/%s", task_success, len(task_rows))
+        log.info("  migration progress")
 
         mysql_cur.execute(
             """
@@ -3163,7 +3775,7 @@ def migrate_approve_history():
             """
         )
         rec_rows = mysql_cur.fetchall()
-        log.info("  approve_flow_record rows: %s", len(rec_rows))
+        log.info("  migration progress")
         rec_success = 0
         for row in rec_rows:
             legacy_id = _safe_int(row.get("id"))
@@ -3266,7 +3878,7 @@ def migrate_approve_history():
             if rec_success % BATCH_SIZE == 0:
                 pg_conn.commit()
         pg_conn.commit()
-        log.info("  approve_flow_record migrated: %s/%s", rec_success, len(rec_rows))
+        log.info("  migration progress")
 
         mysql_cur.execute(
             """
@@ -3312,14 +3924,14 @@ def migrate_approve_history():
                 pg_conn.commit()
                 continue
         pg_conn.commit()
-        log.info("  approval fallback tasks added: %s", fallback_added)
+        log.info("  migration progress")
     finally:
         mysql_conn.close()
         pg_conn.close()
 
 
 def migrate_cost_payment():
-    log.info("=== PHASE 9: migrate costticket/payment domain ===")
+    log.info("  migration progress")
     mysql_conn = get_mysql()
     pg_conn = get_pg()
     mysql_cur = mysql_conn.cursor(dictionary=True)
@@ -3351,7 +3963,7 @@ def migrate_cost_payment():
             """
         )
         rows = mysql_cur.fetchall()
-        log.info("  costticket rows: %s", len(rows))
+        log.info("  migration progress")
         success = 0
 
         for row in rows:
@@ -3470,7 +4082,7 @@ def migrate_cost_payment():
             if success % BATCH_SIZE == 0:
                 pg_conn.commit()
         pg_conn.commit()
-        log.info("  costticket migrated: %s/%s", success, len(rows))
+        log.info("  migration progress")
 
         costticket_map = _load_legacy_id_map(pg_cur, "costtickets")
 
@@ -3565,7 +4177,7 @@ def migrate_cost_payment():
             if item_success % BATCH_SIZE == 0:
                 pg_conn.commit()
         pg_conn.commit()
-        log.info("  costticket_invoice migrated: %s/%s", item_success, len(rows))
+        log.info("  migration progress")
 
         mysql_cur.execute(
             """
@@ -3583,7 +4195,7 @@ def migrate_cost_payment():
             """
         )
         rows = mysql_cur.fetchall()
-        log.info("  balance_payment rows: %s", len(rows))
+        log.info("  migration progress")
         payment_success = 0
         payment_map = {}
         for row in rows:
@@ -3654,7 +4266,7 @@ def migrate_cost_payment():
             if payment_success % BATCH_SIZE == 0:
                 pg_conn.commit()
         pg_conn.commit()
-        log.info("  balance_payment migrated: %s/%s", payment_success, len(rows))
+        log.info("  migration progress")
 
         mysql_cur.execute(
             """
@@ -3718,7 +4330,7 @@ def migrate_cost_payment():
             if item_success % BATCH_SIZE == 0:
                 pg_conn.commit()
         pg_conn.commit()
-        log.info("  balance_payment_item migrated: %s/%s", item_success, len(rows))
+        log.info("  migration progress")
 
         mysql_cur.execute(
             """
@@ -3775,14 +4387,14 @@ def migrate_cost_payment():
             if file_success % BATCH_SIZE == 0:
                 pg_conn.commit()
         pg_conn.commit()
-        log.info("  balance_payment_file migrated: %s/%s", file_success, len(rows))
+        log.info("  migration progress")
     finally:
         mysql_conn.close()
         pg_conn.close()
 
 
 def migrate_artifacts():
-    log.info("=== PHASE 10: migrate contract/invoice/drawing/bankflow artifacts ===")
+    log.info("  migration progress")
     mysql_conn = get_mysql()
     pg_conn = get_pg()
     mysql_cur = mysql_conn.cursor(dictionary=True)
@@ -3861,7 +4473,7 @@ def migrate_artifacts():
             if success % BATCH_SIZE == 0:
                 pg_conn.commit()
         pg_conn.commit()
-        log.info("  contractdetail migrated: %s/%s", success, len(rows))
+        log.info("  migration progress")
 
         mysql_cur.execute(
             """
@@ -3909,7 +4521,7 @@ def migrate_artifacts():
             if success % BATCH_SIZE == 0:
                 pg_conn.commit()
         pg_conn.commit()
-        log.info("  contract_attribute migrated: %s/%s", success, len(rows))
+        log.info("  migration progress")
 
         attachment_specs = [
             (
@@ -4001,7 +4613,7 @@ def migrate_artifacts():
                 if success % BATCH_SIZE == 0:
                     pg_conn.commit()
             pg_conn.commit()
-            log.info("  %s migrated: %s/%s", table_name, success, len(rows))
+            log.info("  migration progress")
 
         mysql_cur.execute(
             """
@@ -4057,7 +4669,7 @@ def migrate_artifacts():
             if success % BATCH_SIZE == 0:
                 pg_conn.commit()
         pg_conn.commit()
-        log.info("  invoice_item migrated: %s/%s", success, len(rows))
+        log.info("  migration progress")
 
         drawing_specs = [
             (
@@ -4139,7 +4751,7 @@ def migrate_artifacts():
                 if success % BATCH_SIZE == 0:
                     pg_conn.commit()
             pg_conn.commit()
-            log.info("  %s migrated: %s/%s", table_name, success, len(rows))
+            log.info("  migration progress")
 
         mysql_cur.execute(
             """
@@ -4223,14 +4835,14 @@ def migrate_artifacts():
             if success % BATCH_SIZE == 0:
                 pg_conn.commit()
         pg_conn.commit()
-        log.info("  bankflow migrated: %s/%s", success, len(rows))
+        log.info("  migration progress")
     finally:
         mysql_conn.close()
         pg_conn.close()
 
 
 def migrate_traceability_extra():
-    log.info("=== PHASE 11: migrate approval/payment/gathering traceability extras ===")
+    log.info("  migration progress")
     mysql_conn = get_mysql()
     pg_conn = get_pg()
     mysql_cur = mysql_conn.cursor(dictionary=True)
@@ -4358,7 +4970,7 @@ def migrate_traceability_extra():
             if approval_success % BATCH_SIZE == 0:
                 pg_conn.commit()
         pg_conn.commit()
-        log.info("  approve_flow_approval migrated: %s/%s", approval_success, len(approval_rows))
+        log.info("  migration progress")
 
         mysql_cur.execute(
             """
@@ -4464,7 +5076,7 @@ def migrate_traceability_extra():
             if bi_success % BATCH_SIZE == 0:
                 pg_conn.commit()
         pg_conn.commit()
-        log.info("  balance_invoice migrated: %s/%s", bi_success, len(bi_rows))
+        log.info("  migration progress")
 
         mysql_cur.execute(
             """
@@ -4538,14 +5150,14 @@ def migrate_traceability_extra():
             if gi_success % BATCH_SIZE == 0:
                 pg_conn.commit()
         pg_conn.commit()
-        log.info("  gathering_item migrated: %s/%s", gi_success, len(gi_rows))
+        log.info("  migration progress")
     finally:
         mysql_conn.close()
         pg_conn.close()
 
 
 def migrate_business_extra():
-    log.info("=== PHASE 13: migrate business extra domain tables ===")
+    log.info("  migration progress")
     pg_conn = get_pg()
     pg_cur = pg_conn.cursor()
     try:
@@ -4567,7 +5179,7 @@ def migrate_business_extra():
         if not row:
             raise RuntimeError("no successful raw landing batch for source_db=icrm")
         batch_id = int(row[0])
-        log.info("  use raw batch_id=%s", batch_id)
+        log.info("  migration progress")
 
         pg_cur.execute(
             """
@@ -4639,7 +5251,7 @@ def migrate_business_extra():
         )
         _sync_migration_log_from_raw(pg_cur, batch_id, "customer", "customers")
         pg_conn.commit()
-        log.info("  customer migrated")
+        log.info("  migration progress")
 
         pg_cur.execute(
             """
@@ -4675,7 +5287,7 @@ def migrate_business_extra():
         )
         _sync_migration_log_from_raw(pg_cur, batch_id, "record_balance", "balance_records")
         pg_conn.commit()
-        log.info("  record_balance migrated")
+        log.info("  migration progress")
 
         pg_cur.execute(
             """
@@ -4711,7 +5323,7 @@ def migrate_business_extra():
         )
         _sync_migration_log_from_raw(pg_cur, batch_id, "record_gathering", "gathering_records")
         pg_conn.commit()
-        log.info("  record_gathering migrated")
+        log.info("  migration progress")
 
         pg_cur.execute(
             """
@@ -4747,7 +5359,7 @@ def migrate_business_extra():
         )
         _sync_migration_log_from_raw(pg_cur, batch_id, "record_invoice", "invoice_records")
         pg_conn.commit()
-        log.info("  record_invoice migrated")
+        log.info("  migration progress")
 
         pg_cur.execute(
             """
@@ -4839,7 +5451,7 @@ def migrate_business_extra():
         )
         _sync_migration_log_from_raw(pg_cur, batch_id, "contract_creation", "contract_creations")
         pg_conn.commit()
-        log.info("  contract_creation migrated")
+        log.info("  migration progress")
 
         pg_cur.execute(
             """
@@ -4876,7 +5488,7 @@ def migrate_business_extra():
         )
         _sync_migration_log_from_raw(pg_cur, batch_id, "contract_creation_file", "contract_creation_attachments")
         pg_conn.commit()
-        log.info("  contract_creation_file migrated")
+        log.info("  migration progress")
 
         pg_cur.execute(
             """
@@ -4976,7 +5588,7 @@ def migrate_business_extra():
         )
         _sync_migration_log_from_raw(pg_cur, batch_id, "contract_extra", "contract_extras")
         pg_conn.commit()
-        log.info("  contract_extra migrated")
+        log.info("  migration progress")
 
         pg_cur.execute(
             """
@@ -5013,7 +5625,7 @@ def migrate_business_extra():
         )
         _sync_migration_log_from_raw(pg_cur, batch_id, "contract_extra_file", "contract_extra_attachments")
         pg_conn.commit()
-        log.info("  contract_extra_file migrated")
+        log.info("  migration progress")
 
         pg_cur.execute(
             """
@@ -5136,7 +5748,7 @@ def migrate_business_extra():
         )
         _sync_migration_log_from_raw(pg_cur, batch_id, "bid_assure", "bid_assures")
         pg_conn.commit()
-        log.info("  bid_assure migrated")
+        log.info("  migration progress")
 
         pg_cur.execute(
             """
@@ -5212,13 +5824,13 @@ def migrate_business_extra():
         )
         _sync_migration_log_from_raw(pg_cur, batch_id, "bid_assure_flow", "bid_assure_flows")
         pg_conn.commit()
-        log.info("  bid_assure_flow migrated")
+        log.info("  migration progress")
     finally:
         pg_conn.close()
 
 
 def migrate_business_phase2():
-    log.info("=== PHASE 14: migrate business phase2 (archive/attachments/partner files) ===")
+    log.info("  migration progress")
     pg_conn = get_pg()
     pg_cur = pg_conn.cursor()
     try:
@@ -5240,7 +5852,7 @@ def migrate_business_phase2():
         if not row:
             raise RuntimeError("no successful raw landing batch for source_db=icrm")
         batch_id = int(row[0])
-        log.info("  use raw batch_id=%s", batch_id)
+        log.info("  migration progress")
 
         pg_cur.execute(
             """
@@ -5293,7 +5905,7 @@ def migrate_business_phase2():
         )
         _sync_migration_log_from_raw(pg_cur, batch_id, "contract_archive", "contract_archives")
         pg_conn.commit()
-        log.info("  contract_archive migrated")
+        log.info("  migration progress")
 
         pg_cur.execute(
             """
@@ -5330,7 +5942,7 @@ def migrate_business_phase2():
         )
         _sync_migration_log_from_raw(pg_cur, batch_id, "gathering_file", "gathering_attachments")
         pg_conn.commit()
-        log.info("  gathering_file migrated")
+        log.info("  migration progress")
 
         pg_cur.execute(
             """
@@ -5390,7 +6002,7 @@ def migrate_business_phase2():
         )
         _sync_migration_log_from_raw(pg_cur, batch_id, "filebond", "filebonds")
         pg_conn.commit()
-        log.info("  filebond migrated")
+        log.info("  migration progress")
 
         pg_cur.execute(
             """
@@ -5438,7 +6050,7 @@ def migrate_business_phase2():
         )
         _sync_migration_log_from_raw(pg_cur, batch_id, "project_fileupload", "project_file_uploads")
         pg_conn.commit()
-        log.info("  project_fileupload migrated")
+        log.info("  migration progress")
 
         pg_cur.execute(
             """
@@ -5479,7 +6091,7 @@ def migrate_business_phase2():
         )
         _sync_migration_log_from_raw(pg_cur, batch_id, "project_file", "project_files")
         pg_conn.commit()
-        log.info("  project_file migrated")
+        log.info("  migration progress")
 
         pg_cur.execute(
             """
@@ -5522,7 +6134,7 @@ def migrate_business_phase2():
         )
         _sync_migration_log_from_raw(pg_cur, batch_id, "contract_cancel", "contract_cancels")
         pg_conn.commit()
-        log.info("  contract_cancel migrated")
+        log.info("  migration progress")
 
         pg_cur.execute(
             """
@@ -5564,7 +6176,7 @@ def migrate_business_phase2():
         )
         _sync_migration_log_from_raw(pg_cur, batch_id, "projectpartner", "project_partners")
         pg_conn.commit()
-        log.info("  projectpartner migrated")
+        log.info("  migration progress")
 
         pg_cur.execute(
             """
@@ -5614,13 +6226,13 @@ def migrate_business_phase2():
         )
         _sync_migration_log_from_raw(pg_cur, batch_id, "company_contract", "company_contracts")
         pg_conn.commit()
-        log.info("  company_contract migrated")
+        log.info("  migration progress")
     finally:
         pg_conn.close()
 
 
 def migrate_business_phase3():
-    log.info("=== PHASE 15: migrate business phase3 (tail business tables) ===")
+    log.info("  migration progress")
     pg_conn = get_pg()
     pg_cur = pg_conn.cursor()
     try:
@@ -5642,7 +6254,7 @@ def migrate_business_phase3():
         if not row:
             raise RuntimeError("no successful raw landing batch for source_db=icrm")
         batch_id = int(row[0])
-        log.info("  use raw batch_id=%s", batch_id)
+        log.info("  migration progress")
 
         source_target = [
             ("balance_print_record", "balance_print_records"),
@@ -5710,13 +6322,13 @@ def migrate_business_phase3():
             )
             _sync_migration_log_from_raw(pg_cur, batch_id, source_table, target_table)
             pg_conn.commit()
-            log.info("  %s migrated", source_table)
+            log.info("  migration progress")
     finally:
         pg_conn.close()
 
 
 def migrate_system_archive():
-    log.info("=== PHASE 16: archive remaining system/log tables ===")
+    log.info("  migration progress")
     pg_conn = get_pg()
     pg_cur = pg_conn.cursor()
     try:
@@ -5737,10 +6349,10 @@ def migrate_system_archive():
         if not row:
             raise RuntimeError("no successful raw landing batch for source_db=icrm")
         batch_id = int(row[0])
-        log.info("  use raw batch_id=%s", batch_id)
+        log.info("  migration progress")
 
-        # contract_attribute has no legacy_id column in target contract_attributes;
-        # it will be archived generically below to close full-table traceability.
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
         pg_cur.execute(
             """
@@ -5760,10 +6372,10 @@ def migrate_system_archive():
         )
         remains = pg_cur.fetchall()
         if not remains:
-            log.info("  no remaining source tables to archive")
+            log.info("  migration progress")
             return
 
-        log.info("  remaining source tables: %s", len(remains))
+            log.info("  migration progress")
         for table_name, src_rows in remains:
             pg_cur.execute(
                 """
@@ -5830,13 +6442,13 @@ def migrate_system_archive():
                 (table_name, batch_id, table_name),
             )
             pg_conn.commit()
-            log.info("  archived %s (%s rows)", table_name, src_rows)
+            log.info("  migration progress")
     finally:
         pg_conn.close()
 
 
 def migrate_supplement():
-    log.info("=== PHASE 7: supplemental backfill (credentials/profile) ===")
+    log.info("  migration progress")
     pg_conn = get_pg()
     pg_cur = pg_conn.cursor()
     try:
@@ -5988,7 +6600,7 @@ def _backfill_profile_personnel(pg_cur):
             e.id AS employee_id,
             COALESCE(e.name, 'UNKNOWN')::text AS employee_name,
             e.executor_ref,
-            '妞ゅ湱娲扮拹鐔荤煑娴?::text AS role,
+            'PROJECT_MANAGER'::text AS role,
             e.position::text AS specialty,
             NULL::text AS qual_type,
             NULL::text AS cert_no
@@ -6050,7 +6662,7 @@ def _insert_raw_rows(pg_cur, batch_id: int, table_name: str, rows: list, pk_colu
         pk_obj = _build_source_pk_object(row, pk_columns)
         pk_json = json.dumps(pk_obj, sort_keys=True, ensure_ascii=False) if pk_obj is not None else ""
         row_json = json.dumps(row_obj, sort_keys=True, ensure_ascii=False)
-        # Include row ordinal to avoid accidental collisions on tables without PK.
+# -----------------------------------------------------------------------------
         row_hash = hashlib.sha256(
             f"{table_name}|{pk_json}|{row_json}|{start_index + idx}".encode("utf-8")
         ).hexdigest()
@@ -6215,7 +6827,7 @@ def _list_pg_pk_columns(pg_cur, schema_name: str, table_name: str):
 
 def migrate_raw_full():
     source_kind = RAW_SOURCE if RAW_SOURCE in ("mysql", "pg") else "mysql"
-    log.info("=== PHASE 11: raw full landing (source=%s -> icrm_raw) ===", source_kind)
+    log.info("  migration progress")
 
     pg_target_conn = get_pg()
     pg_target_cur = pg_target_conn.cursor()
@@ -6251,7 +6863,7 @@ def migrate_raw_full():
         )
         batch_id = pg_target_cur.fetchone()[0]
         pg_target_conn.commit()
-        log.info("  raw landing batch created: batch_id=%s", batch_id)
+        log.info("  migration progress")
 
         if source_kind == "mysql":
             mysql_conn = get_mysql()
@@ -6264,7 +6876,7 @@ def migrate_raw_full():
             pg_source_conn = get_pg()
             source_meta_cur = pg_source_conn.cursor()
             tables = _list_pg_base_tables(source_meta_cur, RAW_PG_SOURCE_SCHEMA)
-            # Avoid self-ingest when source schema is icrm_raw.
+# -----------------------------------------------------------------------------
             tables = [t for t in tables if t not in ("landing_batches", "landing_table_stats", "landing_rows")]
             list_pk_cols = lambda t: _list_pg_pk_columns(source_meta_cur, RAW_PG_SOURCE_SCHEMA, t)
             count_sql = lambda t: (
@@ -6274,7 +6886,7 @@ def migrate_raw_full():
                 f"SELECT * FROM {_pg_quote_ident(RAW_PG_SOURCE_SCHEMA)}.{_pg_quote_ident(t)}"
             )
 
-        log.info("  source base tables: %s", len(tables))
+            log.info("  migration progress")
 
         for table_name in tables:
             table_checksum = hashlib.sha256()
@@ -6425,7 +7037,7 @@ def migrate_raw_full():
 
 def verify_raw_full_latest():
     source_kind = RAW_SOURCE if RAW_SOURCE in ("mysql", "pg") else "mysql"
-    log.info("=== PHASE 12: verify latest raw_full landing (source=%s) ===", source_kind)
+    log.info("  migration progress")
 
     pg_conn = get_pg()
     pg_cur = pg_conn.cursor()
@@ -6501,7 +7113,7 @@ def verify_raw_full_latest():
                 f"raw_full verify failed: {len(mismatches)} table(s) mismatched in batch {batch_id}"
             )
 
-        log.info(
+            log.info(
             "  raw verify passed: batch_id=%s tables=%s rows=%s",
             batch_id, len(tables), verified_rows
         )
@@ -6522,6 +7134,7 @@ PHASES = {
     "regulation": migrate_regulations,
     "contract": migrate_contracts,
     "finance":  migrate_finance,
+    "achievement": migrate_achievements,
     "drawing":  migrate_drawings,
     "approve_history": migrate_approve_history,
     "cost_payment": migrate_cost_payment,
@@ -6533,6 +7146,7 @@ PHASES = {
     "system_archive": migrate_system_archive,
     "supplement": migrate_supplement,
     "verify":   verify,
+    "quality_gate": run_three_libraries_quality_gate,
     "raw_full": migrate_raw_full,
     "verify_raw_full": verify_raw_full_latest,
 }
@@ -6544,6 +7158,7 @@ DEFAULT_ALL_PHASES = [
     "regulation",
     "contract",
     "finance",
+    "achievement",
     "drawing",
     "approve_history",
     "cost_payment",
@@ -6558,6 +7173,7 @@ DEFAULT_ALL_PHASES = [
 ]
 
 def main():
+    global QUALITY_GATE_STRICT, QUALITY_GATE_SAMPLE_LIMIT
     parser = argparse.ArgumentParser(description="iCRM -> CoordOS migration script")
     parser.add_argument(
         "--phase",
@@ -6565,9 +7181,28 @@ def main():
         choices=list(PHASES.keys()) + ["all"],
         help="migration phase",
     )
+    parser.add_argument(
+        "--quality-gate-strict",
+        action="store_true",
+        help="fail with non-zero exit when three-libraries quality gate is RED",
+    )
+    parser.add_argument(
+        "--quality-sample-limit",
+        type=int,
+        default=QUALITY_GATE_SAMPLE_LIMIT,
+        help="sample limit used by three-libraries quality gate checks (default: env QUALITY_GATE_SAMPLE_LIMIT or 20)",
+    )
     args = parser.parse_args()
 
-    log.info("start migration phase=%s", args.phase)
+    QUALITY_GATE_STRICT = bool(QUALITY_GATE_STRICT or args.quality_gate_strict)
+    QUALITY_GATE_SAMPLE_LIMIT = max(1, min(int(args.quality_sample_limit or QUALITY_GATE_SAMPLE_LIMIT), 200))
+
+    log.info(
+        "start migration phase=%s quality_gate_strict=%s quality_sample_limit=%s",
+        args.phase,
+        QUALITY_GATE_STRICT,
+        QUALITY_GATE_SAMPLE_LIMIT,
+    )
     start = datetime.now()
 
     if args.phase == "all":
@@ -6577,7 +7212,7 @@ def main():
         PHASES[args.phase]()
 
     elapsed = (datetime.now() - start).total_seconds()
-    log.info("migration completed in %.1fs", elapsed)
+    log.info("  migration progress")
 
 
 if __name__ == "__main__":

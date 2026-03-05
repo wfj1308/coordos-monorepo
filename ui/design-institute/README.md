@@ -22,12 +22,12 @@ npm run dev
 
 Open: `http://127.0.0.1:5173`
 
-Standalone partner profile page:
-- `http://127.0.0.1:5173/partner-profile.html`
-
-Standalone join page:
-- `http://127.0.0.1:5173/join/` (recommended)
-- `http://127.0.0.1:5173/join.html` (legacy compatibility)
+SPA routes:
+- `http://127.0.0.1:5173/dashboard`
+- `http://127.0.0.1:5173/partner-profile`
+- `http://127.0.0.1:5173/main-flow`
+- `http://127.0.0.1:5173/api-console`
+- `http://127.0.0.1:5173/join`
 
 ## Build
 
@@ -171,7 +171,7 @@ curl "http://127.0.0.1:8090/api/v1/achievement/cn.zhongbei?within_3years=true"
 
 ## Files
 
-- `src/App.jsx`: page and request console.
-- `src/PartnerProfilePage.jsx`: standalone public partner profile page.
+- `src/App.jsx`: SPA router and portal home.
+- `src/PartnerProfilePage.jsx`: partner profile page.
 - `src/index.css`: Tailwind entry and shared component styles.
 - `tailwind.config.js`: theme and scanning config.

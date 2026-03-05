@@ -1,10 +1,5 @@
-﻿import { useState } from "react";
-import {
-  apiRequest,
-  normalizeListData,
-  pickField,
-  trimTrailingSlash,
-} from "../components/app/utils";
+import { useState } from "react";
+import { apiRequest, normalizeListData, pickField, trimTrailingSlash } from "../components/app/utils";
 
 const TABLE_PAGE_SIZE = 20;
 const TABLE_KEYS = [
@@ -60,6 +55,27 @@ function buildDashboardData() {
   };
 }
 
+function buildLibraryQualityGate() {
+  return {
+    status: "UNKNOWN",
+    total_checks: 0,
+    failed_checks: 0,
+    warning_checks: 0,
+    checks: [],
+    updated_at: "",
+  };
+}
+
+function buildLibraryChanges() {
+  return {
+    total: 0,
+    limit: TABLE_PAGE_SIZE,
+    offset: 0,
+    items: [],
+    updated_at: "",
+  };
+}
+
 function toPagedPath(path, page, pageSize) {
   const safePage = Math.max(1, Number(page) || 1);
   const safeSize = Math.max(1, Number(pageSize) || TABLE_PAGE_SIZE);
@@ -75,12 +91,18 @@ export default function useDashboardData({ diBase, useAuth, token }) {
   const [libraryDetail, setLibraryDetail] = useState(null);
   const [libraryDetailLoading, setLibraryDetailLoading] = useState(false);
   const [libraryDetailError, setLibraryDetailError] = useState("");
+  const [libraryChanges, setLibraryChanges] = useState(buildLibraryChanges());
+  const [libraryChangesLoading, setLibraryChangesLoading] = useState(false);
+  const [libraryChangesError, setLibraryChangesError] = useState("");
   const [libraryRelations, setLibraryRelations] = useState(null);
   const [libraryRelationsLoading, setLibraryRelationsLoading] = useState(false);
   const [libraryRelationsError, setLibraryRelationsError] = useState("");
   const [executorVault, setExecutorVault] = useState(null);
   const [executorVaultLoading, setExecutorVaultLoading] = useState(false);
   const [executorVaultError, setExecutorVaultError] = useState("");
+  const [libraryQuality, setLibraryQuality] = useState(buildLibraryQualityGate());
+  const [libraryQualityLoading, setLibraryQualityLoading] = useState(false);
+  const [libraryQualityError, setLibraryQualityError] = useState("");
   const [librarySearch, setLibrarySearch] = useState({
     total: 0,
     limit: TABLE_PAGE_SIZE,
@@ -90,6 +112,10 @@ export default function useDashboardData({ diBase, useAuth, token }) {
   });
   const [librarySearchLoading, setLibrarySearchLoading] = useState(false);
   const [librarySearchError, setLibrarySearchError] = useState("");
+  const [libraryViewerRole, setLibraryViewerRole] = useState("admin");
+  const [libraryViewerExecutorRef, setLibraryViewerExecutorRef] = useState("");
+  const [libraryIncludeHistory, setLibraryIncludeHistory] = useState(false);
+  const [libraryValidOn, setLibraryValidOn] = useState("");
   const [selectedProjectRef, setSelectedProjectRef] = useState("");
   const [projectDetailLoading, setProjectDetailLoading] = useState(false);
   const [tablePages, setTablePages] = useState(buildDefaultTablePages());
@@ -102,6 +128,69 @@ export default function useDashboardData({ diBase, useAuth, token }) {
       rows,
       total: total >= 0 ? total : rows.length,
     };
+  };
+
+  const normalizeQualityGatePayload = (data) => {
+    const payload = data && typeof data === "object" ? data : {};
+    const rawChecks = pickField(payload, ["checks", "Checks"], []);
+    const checks = Array.isArray(rawChecks) ? rawChecks : [];
+    const totalRaw = pickField(payload, ["total_checks", "totalChecks", "TotalChecks"], checks.length);
+    const failedRaw = pickField(payload, ["failed_checks", "failedChecks", "FailedChecks"], 0);
+    const warningRaw = pickField(payload, ["warning_checks", "warningChecks", "WarningChecks"], 0);
+    return {
+      status: String(pickField(payload, ["status", "Status"], "UNKNOWN")).toUpperCase() || "UNKNOWN",
+      total_checks: Number.isFinite(Number(totalRaw)) ? Math.max(0, Number(totalRaw)) : checks.length,
+      failed_checks: Number.isFinite(Number(failedRaw)) ? Math.max(0, Number(failedRaw)) : 0,
+      warning_checks: Number.isFinite(Number(warningRaw)) ? Math.max(0, Number(warningRaw)) : 0,
+      checks,
+      updated_at: String(pickField(payload, ["updated_at", "updatedAt", "UpdatedAt"], "")),
+    };
+  };
+
+  const fetchLibrariesQuality = async (sampleLimit = TABLE_PAGE_SIZE) => {
+    const di = trimTrailingSlash(diBase.trim());
+    if (!di) {
+      throw new Error("Design-Ins Base URL 不能为空");
+    }
+    const limit = Math.max(1, Math.min(200, Number(sampleLimit) || TABLE_PAGE_SIZE));
+    const res = await apiRequest({
+      method: "GET",
+      url: `${di}/api/v1/libraries/quality-gate?sample_limit=${limit}`,
+      token: useAuth ? token : "",
+    });
+    return normalizeQualityGatePayload(res.data);
+  };
+
+  const applyLibraryScope = (qs) => {
+    if (!qs || typeof qs.set !== "function") return;
+    const role = String(libraryViewerRole || "admin")
+      .trim()
+      .toLowerCase();
+    const normalizedRole = role === "executor" || role === "manager" ? role : "admin";
+    qs.set("viewer_role", normalizedRole);
+    if (normalizedRole === "executor") {
+      const executorRef = String(libraryViewerExecutorRef || "").trim();
+      if (executorRef) qs.set("viewer_executor_ref", executorRef);
+    }
+  };
+
+  const applyLibraryVersionOptions = (qs) => {
+    if (!qs || typeof qs.set !== "function") return;
+    const includeHistory = Boolean(libraryIncludeHistory);
+    qs.set("include_history", includeHistory ? "true" : "false");
+    const validOn = String(libraryValidOn || "").trim();
+    if (!includeHistory && validOn) {
+      qs.set("valid_on", validOn);
+    }
+  };
+
+  const validateLibraryScope = () => {
+    const role = String(libraryViewerRole || "admin")
+      .trim()
+      .toLowerCase();
+    if (role === "executor" && !String(libraryViewerExecutorRef || "").trim()) {
+      throw new Error("执行体视角需要填写 viewer_executor_ref");
+    }
   };
 
   const loadProjectDetail = async (projectRef) => {
@@ -276,17 +365,23 @@ export default function useDashboardData({ diBase, useAuth, token }) {
       }
 
       try {
+        validateLibraryScope();
         const qualificationOffset = (Math.max(1, Number(activePages.libraryQualifications) || 1) - 1) * TABLE_PAGE_SIZE;
         const standardOffset = (Math.max(1, Number(activePages.engineeringStandards) || 1) - 1) * TABLE_PAGE_SIZE;
         const regulationOffset = (Math.max(1, Number(activePages.regulations) || 1) - 1) * TABLE_PAGE_SIZE;
-        const libsQuery = new URLSearchParams({
+        const libsParams = new URLSearchParams({
           qualification_limit: String(TABLE_PAGE_SIZE),
           qualification_offset: String(qualificationOffset),
           standard_limit: String(TABLE_PAGE_SIZE),
           standard_offset: String(standardOffset),
           regulation_limit: String(TABLE_PAGE_SIZE),
           regulation_offset: String(regulationOffset),
-        }).toString();
+          quality_gate: "block",
+          quality_sample_limit: String(TABLE_PAGE_SIZE),
+        });
+        applyLibraryScope(libsParams);
+        applyLibraryVersionOptions(libsParams);
+        const libsQuery = libsParams.toString();
 
         const libsPath = `/api/v1/reports/three-libraries?${libsQuery}`;
         const libsRes = await apiRequest({
@@ -311,7 +406,22 @@ export default function useDashboardData({ diBase, useAuth, token }) {
         next.regulations = regulationsParsed.rows;
         next.totals.regulations = regulationsParsed.total;
       } catch (libraryErr) {
-        warnings.push(`three-libraries: ${String(libraryErr)}`);
+        const msg = String(libraryErr || "");
+        if (msg.includes("409") && msg.toLowerCase().includes("quality gate is red")) {
+          warnings.push("three-libraries: 数据质量闸门为 RED，三库列表已阻断（409）；请先处理上方失败检查项。");
+        } else {
+          warnings.push(`three-libraries: ${msg}`);
+        }
+      }
+
+      try {
+        const qualityGate = await fetchLibrariesQuality(TABLE_PAGE_SIZE);
+        setLibraryQuality(qualityGate);
+        setLibraryQualityError("");
+      } catch (qualityErr) {
+        setLibraryQuality(buildLibraryQualityGate());
+        setLibraryQualityError(String(qualityErr));
+        warnings.push(`quality-gate: ${String(qualityErr)}`);
       }
 
       let pickedProjectRef = selectedProjectRef;
@@ -387,9 +497,14 @@ export default function useDashboardData({ diBase, useAuth, token }) {
     setLibraryDetailLoading(true);
     setLibraryDetailError("");
     try {
+      validateLibraryScope();
+      const qs = new URLSearchParams();
+      applyLibraryScope(qs);
+      applyLibraryVersionOptions(qs);
+      const suffix = qs.toString();
       const res = await apiRequest({
         method: "GET",
-        url: `${di}/api/v1/libraries/${encodeURIComponent(type)}/${Math.trunc(id)}`,
+        url: `${di}/api/v1/libraries/${encodeURIComponent(type)}/${Math.trunc(id)}${suffix ? `?${suffix}` : ""}`,
         token: useAuth ? token : "",
       });
       setLibraryDetail(res.data);
@@ -398,6 +513,69 @@ export default function useDashboardData({ diBase, useAuth, token }) {
       setLibraryDetailError(String(err));
     } finally {
       setLibraryDetailLoading(false);
+    }
+  };
+
+  const loadLibraryChanges = async (libraryType, rawID, input = {}) => {
+    const di = trimTrailingSlash(diBase.trim());
+    if (!di) {
+      setLibraryChangesError("Design-Ins Base URL 不能为空");
+      return;
+    }
+    const type = String(libraryType || "").trim();
+    const id = Number(rawID);
+    if (!type) {
+      setLibraryChangesError("请输入库类型");
+      return;
+    }
+    if (!Number.isFinite(id) || id <= 0) {
+      setLibraryChangesError("请输入有效ID");
+      return;
+    }
+    const limit = Math.max(1, Math.min(200, Number(input.limit) || TABLE_PAGE_SIZE));
+    const offset = Math.max(0, Number(input.offset) || 0);
+    const from = String(input.from || "").trim();
+    const to = String(input.to || "").trim();
+
+    setLibraryChangesLoading(true);
+    setLibraryChangesError("");
+    try {
+      validateLibraryScope();
+      const qs = new URLSearchParams({
+        limit: String(limit),
+        offset: String(offset),
+      });
+      if (from) qs.set("from", from);
+      if (to) qs.set("to", to);
+      applyLibraryScope(qs);
+      applyLibraryVersionOptions(qs);
+      const res = await apiRequest({
+        method: "GET",
+        url: `${di}/api/v1/libraries/${encodeURIComponent(type)}/${Math.trunc(id)}/changes?${qs.toString()}`,
+        token: useAuth ? token : "",
+      });
+      const payloadRaw = res.data && typeof res.data === "object" ? res.data : {};
+      const payload = payloadRaw.data && typeof payloadRaw.data === "object" ? payloadRaw.data : payloadRaw;
+      const items = normalizeListData(payload);
+      const totalRaw = pickField(payload, ["total", "Total"], items.length);
+      const payloadTotal = Number.isFinite(Number(totalRaw)) ? Number(totalRaw) : items.length;
+      const limitRaw = pickField(payload, ["limit", "Limit"], limit);
+      const payloadLimit = Number.isFinite(Number(limitRaw)) ? Number(limitRaw) : limit;
+      const offsetRaw = pickField(payload, ["offset", "Offset"], offset);
+      const payloadOffset = Number.isFinite(Number(offsetRaw)) ? Number(offsetRaw) : offset;
+      const updatedAt = String(pickField(payload, ["updated_at", "updatedAt", "UpdatedAt"], ""));
+      setLibraryChanges({
+        total: payloadTotal >= 0 ? payloadTotal : items.length,
+        limit: payloadLimit > 0 ? payloadLimit : limit,
+        offset: payloadOffset >= 0 ? payloadOffset : offset,
+        items,
+        updated_at: updatedAt,
+      });
+    } catch (err) {
+      setLibraryChanges(buildLibraryChanges());
+      setLibraryChangesError(String(err));
+    } finally {
+      setLibraryChangesLoading(false);
     }
   };
 
@@ -417,13 +595,15 @@ export default function useDashboardData({ diBase, useAuth, token }) {
     setExecutorVaultLoading(true);
     setExecutorVaultError("");
     try {
+      validateLibraryScope();
       const qs = new URLSearchParams({
         executor_ref: ref,
         drawing_limit: String(limit),
-      }).toString();
+      });
+      applyLibraryScope(qs);
       const res = await apiRequest({
         method: "GET",
-        url: `${di}/api/v1/libraries/executor-vault?${qs}`,
+        url: `${di}/api/v1/libraries/executor-vault?${qs.toString()}`,
         token: useAuth ? token : "",
       });
       setExecutorVault(res.data);
@@ -456,10 +636,13 @@ export default function useDashboardData({ diBase, useAuth, token }) {
     setLibraryRelationsLoading(true);
     setLibraryRelationsError("");
     try {
-      const qs = new URLSearchParams({ limit: String(safeLimit) }).toString();
+      validateLibraryScope();
+      const qs = new URLSearchParams({ limit: String(safeLimit) });
+      applyLibraryScope(qs);
+      applyLibraryVersionOptions(qs);
       const res = await apiRequest({
         method: "GET",
-        url: `${di}/api/v1/libraries/${encodeURIComponent(type)}/${Math.trunc(id)}/relations?${qs}`,
+        url: `${di}/api/v1/libraries/${encodeURIComponent(type)}/${Math.trunc(id)}/relations?${qs.toString()}`,
         token: useAuth ? token : "",
       });
       setLibraryRelations(res.data);
@@ -490,6 +673,7 @@ export default function useDashboardData({ diBase, useAuth, token }) {
     setLibrarySearchLoading(true);
     setLibrarySearchError("");
     try {
+      validateLibraryScope();
       const qs = new URLSearchParams({
         limit: String(limit),
         offset: String(offset),
@@ -500,6 +684,8 @@ export default function useDashboardData({ diBase, useAuth, token }) {
       if (updatedFrom) qs.set("updated_from", updatedFrom);
       if (updatedTo) qs.set("updated_to", updatedTo);
       if (hasExecutor) qs.set("has_executor", hasExecutor);
+      applyLibraryScope(qs);
+      applyLibraryVersionOptions(qs);
 
       const res = await apiRequest({
         method: "GET",
@@ -536,6 +722,20 @@ export default function useDashboardData({ diBase, useAuth, token }) {
     }
   };
 
+  const loadLibrariesQuality = async (sampleLimit = TABLE_PAGE_SIZE) => {
+    setLibraryQualityLoading(true);
+    setLibraryQualityError("");
+    try {
+      const payload = await fetchLibrariesQuality(sampleLimit);
+      setLibraryQuality(payload);
+    } catch (err) {
+      setLibraryQuality(buildLibraryQualityGate());
+      setLibraryQualityError(String(err));
+    } finally {
+      setLibraryQualityLoading(false);
+    }
+  };
+
   return {
     dashboard,
     dashboardLoading,
@@ -543,15 +743,29 @@ export default function useDashboardData({ diBase, useAuth, token }) {
     libraryDetail,
     libraryDetailLoading,
     libraryDetailError,
+    libraryChanges,
+    libraryChangesLoading,
+    libraryChangesError,
     libraryRelations,
     libraryRelationsLoading,
     libraryRelationsError,
     executorVault,
     executorVaultLoading,
     executorVaultError,
+    libraryQuality,
+    libraryQualityLoading,
+    libraryQualityError,
     librarySearch,
     librarySearchLoading,
     librarySearchError,
+    libraryViewerRole,
+    setLibraryViewerRole,
+    libraryViewerExecutorRef,
+    setLibraryViewerExecutorRef,
+    libraryIncludeHistory,
+    setLibraryIncludeHistory,
+    libraryValidOn,
+    setLibraryValidOn,
     selectedProjectRef,
     projectDetailLoading,
     tablePages,
@@ -561,8 +775,10 @@ export default function useDashboardData({ diBase, useAuth, token }) {
     loadDashboardData,
     changeTablePage,
     loadLibraryDetail,
+    loadLibraryChanges,
     loadLibraryRelations,
     loadExecutorVault,
+    loadLibrariesQuality,
     searchLibraries,
   };
 }

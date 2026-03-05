@@ -218,9 +218,13 @@ func (s *PGStore) Create(ctx context.Context, e *Employee) error {
 func (s *PGStore) Get(ctx context.Context, id int64) (*Employee, error) {
 	e := &Employee{}
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id,legacy_id,name,phone,account,company_id,department_id,user_id,
-		       position,start_date,end_date,executor_ref,
-		       tenant_id,deleted,created_at,updated_at,migrate_status
+		SELECT id,legacy_id,
+		       COALESCE(name,''),COALESCE(phone,''),COALESCE(account,''),
+		       company_id,department_id,user_id,
+		       COALESCE(position,''),start_date,end_date,executor_ref,
+		       COALESCE(tenant_id,0),COALESCE(deleted,FALSE),
+		       COALESCE(created_at,NOW()),COALESCE(updated_at,NOW()),
+		       COALESCE(migrate_status,'')
 		FROM employees WHERE id=$1 AND deleted=FALSE`, id,
 	).Scan(
 		&e.ID, &e.LegacyID, &e.Name, &e.Phone, &e.Account,
@@ -234,9 +238,13 @@ func (s *PGStore) Get(ctx context.Context, id int64) (*Employee, error) {
 func (s *PGStore) GetByUserID(ctx context.Context, userID int64) (*Employee, error) {
 	e := &Employee{}
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id,legacy_id,name,phone,account,company_id,department_id,user_id,
-		       position,start_date,end_date,executor_ref,
-		       tenant_id,deleted,created_at,updated_at,migrate_status
+		SELECT id,legacy_id,
+		       COALESCE(name,''),COALESCE(phone,''),COALESCE(account,''),
+		       company_id,department_id,user_id,
+		       COALESCE(position,''),start_date,end_date,executor_ref,
+		       COALESCE(tenant_id,0),COALESCE(deleted,FALSE),
+		       COALESCE(created_at,NOW()),COALESCE(updated_at,NOW()),
+		       COALESCE(migrate_status,'')
 		FROM employees WHERE user_id=$1 AND deleted=FALSE`, userID,
 	).Scan(
 		&e.ID, &e.LegacyID, &e.Name, &e.Phone, &e.Account,
@@ -282,9 +290,13 @@ func (s *PGStore) List(ctx context.Context, f EmployeeFilter) ([]*Employee, int,
 	s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM employees WHERE "+where, args...).Scan(&total)
 
 	rows, err := s.db.QueryContext(ctx,
-		fmt.Sprintf(`SELECT id,legacy_id,name,phone,account,company_id,department_id,user_id,
-			position,start_date,end_date,executor_ref,
-			tenant_id,deleted,created_at,updated_at,migrate_status
+		fmt.Sprintf(`SELECT id,legacy_id,
+			COALESCE(name,''),COALESCE(phone,''),COALESCE(account,''),
+			company_id,department_id,user_id,
+			COALESCE(position,''),start_date,end_date,executor_ref,
+			COALESCE(tenant_id,0),COALESCE(deleted,FALSE),
+			COALESCE(created_at,NOW()),COALESCE(updated_at,NOW()),
+			COALESCE(migrate_status,'')
 			FROM employees WHERE %s ORDER BY name LIMIT $%d OFFSET $%d`,
 			where, i, i+1),
 		append(args, f.Limit, f.Offset)...,
@@ -296,12 +308,14 @@ func (s *PGStore) List(ctx context.Context, f EmployeeFilter) ([]*Employee, int,
 	var result []*Employee
 	for rows.Next() {
 		e := &Employee{}
-		rows.Scan(
+		if err := rows.Scan(
 			&e.ID, &e.LegacyID, &e.Name, &e.Phone, &e.Account,
 			&e.CompanyID, &e.DepartmentID, &e.UserID,
 			&e.Position, &e.StartDate, &e.EndDate, &e.ExecutorRef,
 			&e.TenantID, &e.Deleted, &e.CreatedAt, &e.UpdatedAt, &e.MigrateStatus,
-		)
+		); err != nil {
+			return nil, 0, err
+		}
 		result = append(result, e)
 	}
 	return result, total, rows.Err()

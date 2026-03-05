@@ -1,4 +1,4 @@
-﻿-- ============================================================
+-- ============================================================
 -- iCRM -> CoordOS migration schema
 -- Source: MySQL 5.7 (icrm)
 -- Target: PostgreSQL 14 (coordos)
@@ -1087,6 +1087,8 @@ CREATE TABLE IF NOT EXISTS regulation_documents (
     keywords        TEXT,
     summary         TEXT,
     source_url      TEXT,
+    project_ref     VARCHAR(500),
+    executor_ref    VARCHAR(500),
     ref             VARCHAR(500),
     deleted         BOOLEAN NOT NULL DEFAULT FALSE,
     tenant_id       INT NOT NULL DEFAULT 10000,
